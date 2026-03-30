@@ -197,8 +197,8 @@ export default function App() {
         setServers(prevServers => prevServers.map(server => {
           const stat = data.find((s: any) => s.server_id === server.id);
           if (stat) {
-            // Si no hay actualización en 3 minutos (180000 ms), marcar como offline
-            const isOffline = (Date.now() - stat.last_updated) > 180000;
+            // Si no hay actualización en 8 horas (28800000 ms), marcar como offline
+            const isOffline = (Date.now() - stat.last_updated) > 28800000;
             return {
               ...server,
               cpuUsage: stat.cpu_usage,
