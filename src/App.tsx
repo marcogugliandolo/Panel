@@ -359,7 +359,7 @@ export default function App() {
         <div className="absolute inset-0 bg-dot-grid pointer-events-none" />
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-[#00ff9d]/10 blur-[120px] pointer-events-none rounded-full" />
         
-        <div className="z-10 w-full max-w-md p-8 bg-[#0a0a0c]/80 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl">
+        <div className="z-10 w-full max-w-md p-6 md:p-8 mx-4 bg-[#0a0a0c]/80 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl">
           <div className="flex flex-col items-center mb-8">
             <div className="w-16 h-16 bg-gradient-to-br from-[#00ff9d] to-[#00cc7d] rounded-2xl flex items-center justify-center text-black shadow-[0_0_30px_rgba(0,255,157,0.4)] mb-4">
               <Activity size={32} strokeWidth={2.5} />
@@ -434,55 +434,56 @@ export default function App() {
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-[#00ff9d]/5 blur-[120px] pointer-events-none rounded-full" />
       
       {/* Header */}
-      <header className="h-20 border-b border-white/10 bg-[#0a0a0c]/80 backdrop-blur-xl flex items-center justify-between px-8 sticky top-0 z-40">
-        <div className="flex items-center gap-4">
-          <div className="w-10 h-10 bg-gradient-to-br from-[#00ff9d] to-[#00cc7d] rounded-xl flex items-center justify-center text-black shadow-[0_0_20px_rgba(0,255,157,0.4)]">
-            <Activity size={24} strokeWidth={2.5} />
+      <header className="min-h-[5rem] py-3 border-b border-white/10 bg-[#0a0a0c]/80 backdrop-blur-xl flex flex-wrap items-center justify-between px-4 md:px-8 sticky top-0 z-40 gap-4">
+        <div className="flex items-center gap-3 md:gap-4">
+          <div className="w-8 h-8 md:w-10 md:h-10 bg-gradient-to-br from-[#00ff9d] to-[#00cc7d] rounded-xl flex items-center justify-center text-black shadow-[0_0_20px_rgba(0,255,157,0.4)] shrink-0">
+            <Activity className="w-5 h-5 md:w-6 md:h-6" strokeWidth={2.5} />
           </div>
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-3">
+            <h1 className="text-lg md:text-xl font-bold tracking-tight text-white flex items-center gap-2 md:gap-3">
               Server Panel
               {!isEditMode && (
-                <span className="px-2 py-0.5 rounded-full bg-[#00ff9d]/10 border border-[#00ff9d]/20 text-[#00ff9d] text-[10px] font-mono tracking-widest flex items-center gap-1.5">
+                <span className="px-2 py-0.5 rounded-full bg-[#00ff9d]/10 border border-[#00ff9d]/20 text-[#00ff9d] text-[9px] md:text-[10px] font-mono tracking-widest flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#00ff9d] animate-pulse" />
-                  EN VIVO
+                  <span className="hidden sm:inline">EN VIVO</span>
                 </span>
               )}
               {isEditMode && (
-                <span className="px-2 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-mono tracking-widest flex items-center gap-1.5">
+                <span className="px-2 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[9px] md:text-[10px] font-mono tracking-widest flex items-center gap-1.5">
                   <Settings2 size={10} />
-                  MODO EDICIÓN
+                  <span className="hidden sm:inline">MODO EDICIÓN</span>
                 </span>
               )}
             </h1>
-            <p className="text-xs text-[#8e9299] font-mono tracking-wider mt-0.5">VISTA ESQUEMÁTICA SERVIDORES</p>
+            <p className="hidden md:block text-xs text-[#8e9299] font-mono tracking-wider mt-0.5">VISTA ESQUEMÁTICA SERVIDORES</p>
           </div>
         </div>
         
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 md:gap-4">
           <button 
             onClick={toggleEditMode}
             className={cn(
-              "flex items-center gap-2 px-4 py-2 rounded-lg border transition-all text-sm font-bold",
+              "flex items-center gap-2 px-3 py-2 md:px-4 md:py-2 rounded-lg border transition-all text-sm font-bold",
               isEditMode 
                 ? "bg-blue-500/20 border-blue-500/50 text-blue-400 hover:bg-blue-500/30" 
                 : "bg-white/5 border-white/10 text-white hover:bg-white/10"
             )}
+            title={isEditMode ? 'Terminar Edición' : 'Editar Diseño'}
           >
             {isEditMode ? <Save size={16} /> : <Edit2 size={16} />}
-            {isEditMode ? 'Terminar Edición' : 'Editar Diseño'}
+            <span className="hidden md:inline">{isEditMode ? 'Terminar Edición' : 'Editar Diseño'}</span>
           </button>
           
           {!isEditMode && (
-            <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white/5 border border-white/10">
+            <div className="flex items-center gap-2 px-3 py-2 md:px-4 md:py-2 rounded-lg bg-white/5 border border-white/10">
               <ShieldCheck size={16} className="text-[#00ff9d]" />
-              <span className="text-xs font-mono text-[#8e9299] uppercase tracking-widest">Estado: <span className="text-[#00ff9d] font-bold">CORRECTO</span></span>
+              <span className="hidden md:inline text-xs font-mono text-[#8e9299] uppercase tracking-widest">Estado: <span className="text-[#00ff9d] font-bold">CORRECTO</span></span>
             </div>
           )}
 
           <button 
             onClick={handleLogout}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-all text-sm font-bold ml-2"
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-all text-sm font-bold md:ml-2"
             title="Cerrar Sesión"
           >
             <LogOut size={16} />
@@ -493,8 +494,8 @@ export default function App() {
       {/* Canvas */}
       <main className={cn("flex-1 relative w-full overflow-hidden", isEditMode ? "cursor-default" : "cursor-grab active:cursor-grabbing")}>
         <TransformWrapper
-          initialScale={1}
-          minScale={0.4}
+          initialScale={typeof window !== 'undefined' && window.innerWidth < 768 ? 0.3 : 1}
+          minScale={0.1}
           maxScale={4}
           centerOnInit={true}
           wheel={{ step: 0.1 }}
@@ -504,7 +505,7 @@ export default function App() {
           {({ zoomIn, zoomOut, resetTransform }) => (
             <>
               {/* Controls Overlay */}
-              <div className="absolute bottom-8 right-8 z-50 flex flex-col gap-2">
+              <div className="absolute bottom-4 right-4 md:bottom-8 md:right-8 z-50 flex flex-col gap-2">
                 <button onClick={() => zoomIn()} className="p-3 bg-[#151619]/80 backdrop-blur border border-white/10 rounded-xl hover:bg-white/10 hover:border-white/30 transition-all shadow-lg group">
                   <ZoomIn size={20} className="text-[#8e9299] group-hover:text-white" />
                 </button>
