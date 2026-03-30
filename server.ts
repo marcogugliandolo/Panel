@@ -2,11 +2,16 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import Database from 'better-sqlite3';
 import path from 'path';
+import fs from 'fs';
 
 const PORT = Number(process.env.PORT) || 3000;
-const DB_PATH = process.env.NODE_ENV === 'production' 
-  ? path.join(process.cwd(), 'database.sqlite')
-  : path.join(process.cwd(), 'database.sqlite');
+
+// Asegurar que el directorio data existe para el volumen de Docker
+const dataDir = path.join(process.cwd(), 'data');
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+const DB_PATH = path.join(dataDir, 'database.sqlite');
 
 async function startServer() {
   const app = express();
@@ -20,10 +25,18 @@ async function startServer() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       nodes TEXT,
       zones TEXT
-    )
+    );
+    CREATE TABLE IF NOT EXISTS server_stats (
+      server_id TEXT PRIMARY KEY,
+      cpu_usage REAL,
+      ram_usage REAL,
+      apps_total INTEGER,
+      apps_running INTEGER,
+      last_updated INTEGER
+    );
   `);
 
-  // API Routes
+  // --- API Routes for Layout ---
   app.get('/api/layout', (req, res) => {
     try {
       const row = db.prepare('SELECT * FROM layout ORDER BY id DESC LIMIT 1').get() as any;
@@ -45,6 +58,41 @@ async function startServer() {
       res.json({ success: true });
     } catch (error) {
       console.error('Error saving layout:', error);
+      res.status(500).json({ error: 'Database error' });
+    }
+  });
+
+  // --- API Routes for Server Stats ---
+  app.get('/api/stats', (req, res) => {
+    try {
+      const stats = db.prepare('SELECT * FROM server_stats').all();
+      res.json(stats);
+    } catch (error) {
+      console.error('Error fetching stats:', error);
+      res.status(500).json({ error: 'Database error' });
+    }
+  });
+
+  app.post('/api/stats/:id', (req, res) => {
+    try {
+      const serverId = req.params.id;
+      const { cpu, ram, appsTotal, appsRunning } = req.body;
+      const now = Date.now();
+
+      db.prepare(`
+        INSERT INTO server_stats (server_id, cpu_usage, ram_usage, apps_total, apps_running, last_updated)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(server_id) DO UPDATE SET
+          cpu_usage = excluded.cpu_usage,
+          ram_usage = excluded.ram_usage,
+          apps_total = excluded.apps_total,
+          apps_running = excluded.apps_running,
+          last_updated = excluded.last_updated
+      `).run(serverId, cpu, ram, appsTotal, appsRunning, now);
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Error saving stats:', error);
       res.status(500).json({ error: 'Database error' });
     }
   });

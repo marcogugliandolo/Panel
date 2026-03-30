@@ -187,15 +187,37 @@ export default function App() {
 
   // Simulate live data updates
   useEffect(() => {
-    const timer = setInterval(() => {
-      setServers(prev => prev.map(server => ({
-        ...server,
-        cpuUsage: Math.max(5, Math.min(95, server.cpuUsage + (Math.random() * 10 - 5))),
-        ramUsage: Math.max(10, Math.min(98, server.ramUsage + (Math.random() * 4 - 2))),
-      })));
-    }, 3000);
+    if (!isAuthenticated) return;
+
+    const fetchStats = async () => {
+      try {
+        const res = await fetch('/api/stats');
+        const data = await res.json();
+        
+        setServers(prevServers => prevServers.map(server => {
+          const stat = data.find((s: any) => s.server_id === server.id);
+          if (stat) {
+            // Si no hay actualización en 3 minutos (180000 ms), marcar como offline
+            const isOffline = (Date.now() - stat.last_updated) > 180000;
+            return {
+              ...server,
+              cpuUsage: stat.cpu_usage,
+              ramUsage: stat.ram_usage,
+              status: isOffline ? 'offline' : 'online',
+              realStats: stat // Guardamos los datos reales para usarlos en getStats
+            };
+          }
+          return server;
+        }));
+      } catch (error) {
+        console.error("Error fetching stats:", error);
+      }
+    };
+
+    fetchStats(); // Primera carga
+    const timer = setInterval(fetchStats, 5000); // Actualizar cada 5 segundos
     return () => clearInterval(timer);
-  }, []);
+  }, [isAuthenticated]);
 
   // Dragging Logic
   useEffect(() => {
@@ -259,10 +281,23 @@ export default function App() {
     setEditingItem(null);
   };
 
-  const getStats = (s?: Server) => {
+  const getStats = (s?: any) => {
     if (!s) return [];
+
+    // Si tenemos datos reales de la base de datos
+    if (s.realStats) {
+      const { cpu_usage, ram_usage, apps_total, apps_running } = s.realStats;
+      const appsPercentage = apps_total === 0 ? 0 : (apps_running / apps_total) * 100;
+      return [
+        { label: 'CPU', value: `${cpu_usage.toFixed(1)}%`, percentage: cpu_usage, alert: cpu_usage > 80 },
+        { label: 'RAM', value: `${ram_usage.toFixed(1)}%`, percentage: ram_usage, alert: ram_usage > 85 },
+        { label: 'APPS', value: `${apps_running}/${apps_total}`, percentage: appsPercentage, alert: apps_running < apps_total }
+      ];
+    }
+
+    // Fallback a los datos mockeados si el servidor aún no ha enviado datos
     const appsTotal = s.type === 'Proxmox' ? s.vms : s.containers?.length || 0;
-    const appsRunning = s.type === 'Proxmox' ? s.vms : s.containers?.filter(c => c.status === 'running').length || 0;
+    const appsRunning = s.type === 'Proxmox' ? s.vms : s.containers?.filter((c: any) => c.status === 'running').length || 0;
     const appsPercentage = appsTotal === 0 ? 0 : (appsRunning / appsTotal) * 100;
     
     return [
@@ -288,14 +323,18 @@ export default function App() {
     localStorage.removeItem('server_panel_auth');
   };
 
-  const toggleEditMode = () => {
+  const toggleEditMode = async () => {
     if (isEditMode) {
-      // Guardar cambios en el backend al salir del modo edición
-      fetch('/api/layout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nodes: layoutNodes, zones: layoutZones })
-      }).catch(console.error);
+      // Guardar cambios en el backend al salir del modo edición y ESPERAR a que termine
+      try {
+        await fetch('/api/layout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nodes: layoutNodes, zones: layoutZones })
+        });
+      } catch (error) {
+        console.error('Error al guardar:', error);
+      }
     }
     setIsEditMode(!isEditMode);
   };
