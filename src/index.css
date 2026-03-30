@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+@theme {
+  --font-mono: "JetBrains Mono", "Roboto Mono", monospace;
+  --font-sans: "Inter", system-ui, sans-serif;
+}
+
+:root {
+  --bg: #0a0a0c;
+  --panel: #151619;
+  --border: #2a2d33;
+  --accent: #00ff9d;
+  --warning: #ffcc00;
+  --danger: #ff4444;
+  --text: #e0e0e0;
+  --text-dim: #8e9299;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+}
+
+.scada-grid {
+  background-image: 
+    linear-gradient(rgba(42, 45, 51, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(42, 45, 51, 0.1) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.scanlines {
+  background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.15) 50%, rgba(0,0,0,0.15));
+  background-size: 100% 4px;
+}
+
+.lcd-number {
+  font-family: var(--font-mono);
+  letter-spacing: -1px;
+}
+
+.status-glow-online {
+  box-shadow: 0 0 10px rgba(0, 255, 157, 0.4);
+}
+
+.status-glow-warning {
+  box-shadow: 0 0 10px rgba(255, 204, 0, 0.4);
+}
+
+.status-glow-offline {
+  box-shadow: 0 0 10px rgba(255, 68, 68, 0.4);
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}

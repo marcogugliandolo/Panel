@@ -1,0 +1,5 @@
+{
+  "name": "Server Panel - Vista esquematica servidores",
+  "description": "A professional SCADA-style dashboard for monitoring Raspberry Pi, VPS, and Proxmox infrastructure with Docker container status.",
+  "requestFramePermissions": []
+}
