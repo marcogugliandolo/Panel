@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Globe, Cloud, Router, Server as ServerIcon, Cpu, ShieldCheck, ZoomIn, ZoomOut, Maximize, Edit2, Save, X, Settings2, GripHorizontal } from 'lucide-react';
+import { Activity, Globe, Cloud, Router, Server as ServerIcon, Cpu, ShieldCheck, ZoomIn, ZoomOut, Maximize, Edit2, Save, X, Settings2, GripHorizontal, Lock, User, LogIn } from 'lucide-react';
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import { cn } from './lib/utils';
 import { Server } from './types';
@@ -152,12 +152,48 @@ const SchemaNode: React.FC<SchemaNodeProps> = ({ node, status, stats, isEditMode
 // --- Main App ---
 
 export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [loginError, setLoginError] = useState(false);
+
   const [servers, setServers] = useState<Server[]>(INITIAL_SERVERS);
   
   // Layout State
   const [isEditMode, setIsEditMode] = useState(false);
   const [layoutNodes, setLayoutNodes] = useState(INITIAL_LAYOUT_NODES);
   const [layoutZones, setLayoutZones] = useState(INITIAL_LAYOUT_ZONES);
+  const [isLoadingLayout, setIsLoadingLayout] = useState(true);
+  
+  // Load layout from DB on mount
+  useEffect(() => {
+    fetch('/api/layout')
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.nodes && data.zones) {
+          setLayoutNodes(data.nodes);
+          setLayoutZones(data.zones);
+        }
+      })
+      .catch(err => console.error('Error loading layout:', err))
+      .finally(() => setIsLoadingLayout(false));
+  }, []);
+
+  const toggleEditMode = async () => {
+    if (isEditMode) {
+      // Saving when exiting edit mode
+      try {
+        await fetch('/api/layout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nodes: layoutNodes, zones: layoutZones })
+        });
+      } catch (err) {
+        console.error('Error saving layout:', err);
+      }
+    }
+    setIsEditMode(!isEditMode);
+  };
   
   // Drag & Edit State
   const [dragState, setDragState] = useState<{id: string, type: 'node'|'zone', startX: number, startY: number, initialX: number, initialY: number} | null>(null);
@@ -251,6 +287,90 @@ export default function App() {
     ];
   };
 
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (username === 'gugliama' && password === 'superman94') {
+      setIsAuthenticated(true);
+      setLoginError(false);
+    } else {
+      setLoginError(true);
+    }
+  };
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#050505] text-white font-sans relative overflow-hidden">
+        <style>{`
+          .bg-dot-grid { background-image: radial-gradient(circle at 2px 2px, rgba(255,255,255,0.07) 1px, transparent 0); background-size: 32px 32px; }
+        `}</style>
+        
+        {/* Background effects */}
+        <div className="absolute inset-0 bg-dot-grid pointer-events-none" />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-[#00ff9d]/10 blur-[120px] pointer-events-none rounded-full" />
+        
+        <div className="z-10 w-full max-w-md p-8 bg-[#0a0a0c]/80 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl">
+          <div className="flex flex-col items-center mb-8">
+            <div className="w-16 h-16 bg-gradient-to-br from-[#00ff9d] to-[#00cc7d] rounded-2xl flex items-center justify-center text-black shadow-[0_0_30px_rgba(0,255,157,0.4)] mb-4">
+              <Activity size={32} strokeWidth={2.5} />
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight text-white">Server Panel</h1>
+            <p className="text-sm text-[#8e9299] font-mono tracking-wider mt-1">ACCESO RESTRINGIDO</p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-5">
+            <div>
+              <label className="block text-xs font-bold text-[#8e9299] uppercase tracking-wider mb-2">Usuario</label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <User size={16} className="text-[#8e9299]" />
+                </div>
+                <input 
+                  type="text" 
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="w-full bg-[#151619] border border-white/10 rounded-xl pl-10 pr-4 py-3 text-white focus:outline-none focus:border-[#00ff9d]/50 focus:ring-1 focus:ring-[#00ff9d]/50 transition-all"
+                  placeholder="Introduce tu usuario"
+                  required
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-[#8e9299] uppercase tracking-wider mb-2">Contraseña</label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Lock size={16} className="text-[#8e9299]" />
+                </div>
+                <input 
+                  type="password" 
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full bg-[#151619] border border-white/10 rounded-xl pl-10 pr-4 py-3 text-white focus:outline-none focus:border-[#00ff9d]/50 focus:ring-1 focus:ring-[#00ff9d]/50 transition-all"
+                  placeholder="••••••••"
+                  required
+                />
+              </div>
+            </div>
+
+            {loginError && (
+              <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm text-center font-medium">
+                Usuario o contraseña incorrectos
+              </div>
+            )}
+
+            <button 
+              type="submit"
+              className="w-full py-3 px-4 bg-[#00ff9d] hover:bg-[#00cc7d] text-black font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(0,255,157,0.2)] hover:shadow-[0_0_30px_rgba(0,255,157,0.4)]"
+            >
+              <LogIn size={18} />
+              Acceder al Panel
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-[#050505] text-white overflow-hidden relative font-sans">
       <style>{`
@@ -290,7 +410,7 @@ export default function App() {
         
         <div className="flex items-center gap-4">
           <button 
-            onClick={() => setIsEditMode(!isEditMode)}
+            onClick={toggleEditMode}
             className={cn(
               "flex items-center gap-2 px-4 py-2 rounded-lg border transition-all text-sm font-bold",
               isEditMode 
