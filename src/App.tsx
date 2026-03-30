@@ -120,7 +120,15 @@ const SchemaNode: React.FC<SchemaNodeProps> = ({ node, status, stats, isEditMode
           {!isEditMode && <div className={cn("w-2 h-2 rounded-full", status !== 'online' && "animate-pulse")} style={{ backgroundColor: color, boxShadow: `0 0 10px ${color}` }} />}
         </div>
 
-        <div className="text-[10px] font-mono text-[#8e9299] mb-3 pl-1 truncate pr-6">{node.subtitle}</div>
+        <div className={cn("text-[10px] font-mono text-[#8e9299] pl-1 truncate pr-6", node.ip ? "mb-1" : "mb-3")}>{node.subtitle}</div>
+
+        {node.ip && (
+          <div className="mb-3 pl-1">
+            <span className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-[9px] font-mono text-blue-400/80 tracking-wider">
+              {node.ip}
+            </span>
+          </div>
+        )}
 
         {stats && (
           <div className="flex flex-col gap-2.5 mt-2">
@@ -268,6 +276,7 @@ export default function App() {
         ...n,
         title: formData.get('title') as string,
         subtitle: formData.get('subtitle') as string,
+        ip: formData.get('ip') as string,
         icon: formData.get('icon') as string,
       } : n));
     } else if (editingItem?.type === 'zone') {
@@ -291,7 +300,7 @@ export default function App() {
       return [
         { label: 'CPU', value: `${cpu_usage.toFixed(1)}%`, percentage: cpu_usage, alert: cpu_usage > 80 },
         { label: 'RAM', value: `${ram_usage.toFixed(1)}%`, percentage: ram_usage, alert: ram_usage > 85 },
-        { label: 'APPS', value: `${apps_running}/${apps_total}`, percentage: appsPercentage, alert: apps_running < apps_total }
+        { label: 'CONTENEDORES', value: `${apps_running}/${apps_total}`, percentage: appsPercentage, alert: apps_running < apps_total }
       ];
     }
 
@@ -597,8 +606,12 @@ export default function App() {
               {editingItem.type === 'node' && (
                 <>
                   <div>
-                    <label className="block text-xs font-bold text-[#8e9299] uppercase tracking-wider mb-1">Subtítulo / IP</label>
+                    <label className="block text-xs font-bold text-[#8e9299] uppercase tracking-wider mb-1">Subtítulo</label>
                     <input name="subtitle" defaultValue={editingItem.item.subtitle} className="w-full bg-[#0a0a0c] border border-white/10 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" required />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-[#8e9299] uppercase tracking-wider mb-1">IP</label>
+                    <input name="ip" defaultValue={editingItem.item.ip || ''} className="w-full bg-[#0a0a0c] border border-white/10 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" placeholder="Ej: 192.168.1.100" />
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-[#8e9299] uppercase tracking-wider mb-1">Icono</label>
