@@ -1,56 +1,59 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
-import path from 'path';
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
+import path from 'path';
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
+const DB_PATH = process.env.NODE_ENV === 'production' 
+  ? path.join(process.cwd(), 'database.sqlite')
+  : path.join(process.cwd(), 'database.sqlite');
 
 async function startServer() {
   const app = express();
   app.use(express.json());
 
-  // Initialize SQLite database
+  // Initialize SQLite
   const db = await open({
-    filename: './database.sqlite',
+    filename: DB_PATH,
     driver: sqlite3.Database
   });
 
-  // Create table if it doesn't exist
   await db.exec(`
     CREATE TABLE IF NOT EXISTS layout (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      data TEXT
+      nodes TEXT,
+      zones TEXT
     )
   `);
 
   // API Routes
   app.get('/api/layout', async (req, res) => {
     try {
-      const row = await db.get('SELECT data FROM layout ORDER BY id DESC LIMIT 1');
+      const row = await db.get('SELECT * FROM layout ORDER BY id DESC LIMIT 1');
       if (row) {
-        res.json(JSON.parse(row.data));
+        res.json({ nodes: JSON.parse(row.nodes), zones: JSON.parse(row.zones) });
       } else {
-        res.json(null);
+        res.json({ nodes: null, zones: null });
       }
     } catch (error) {
       console.error('Error fetching layout:', error);
-      res.status(500).json({ error: 'Failed to fetch layout' });
+      res.status(500).json({ error: 'Database error' });
     }
   });
 
   app.post('/api/layout', async (req, res) => {
     try {
       const { nodes, zones } = req.body;
-      await db.run('INSERT INTO layout (data) VALUES (?)', JSON.stringify({ nodes, zones }));
+      await db.run('INSERT INTO layout (nodes, zones) VALUES (?, ?)', [JSON.stringify(nodes), JSON.stringify(zones)]);
       res.json({ success: true });
     } catch (error) {
       console.error('Error saving layout:', error);
-      res.status(500).json({ error: 'Failed to save layout' });
+      res.status(500).json({ error: 'Database error' });
     }
   });
 
-  // Vite middleware for development and static serving for production
+  // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -70,4 +73,4 @@ async function startServer() {
   });
 }
 
-startServer();
+startServer().catch(console.error);

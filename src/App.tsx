@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Globe, Cloud, Router, Server as ServerIcon, Cpu, ShieldCheck, ZoomIn, ZoomOut, Maximize, Edit2, Save, X, Settings2, GripHorizontal, Lock, User, LogIn } from 'lucide-react';
+import { Activity, Globe, Cloud, Router, Server as ServerIcon, Cpu, ShieldCheck, ZoomIn, ZoomOut, Maximize, Edit2, Save, X, Settings2, GripHorizontal, Lock, User, LogIn, LogOut } from 'lucide-react';
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import { cn } from './lib/utils';
 import { Server } from './types';
@@ -152,7 +152,9 @@ const SchemaNode: React.FC<SchemaNodeProps> = ({ node, status, stats, isEditMode
 // --- Main App ---
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    return localStorage.getItem('server_panel_auth') === 'true';
+  });
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState(false);
@@ -163,37 +165,20 @@ export default function App() {
   const [isEditMode, setIsEditMode] = useState(false);
   const [layoutNodes, setLayoutNodes] = useState(INITIAL_LAYOUT_NODES);
   const [layoutZones, setLayoutZones] = useState(INITIAL_LAYOUT_ZONES);
-  const [isLoadingLayout, setIsLoadingLayout] = useState(true);
-  
-  // Load layout from DB on mount
+
+  // Fetch layout from backend
   useEffect(() => {
+    if (!isAuthenticated) return;
     fetch('/api/layout')
       .then(res => res.json())
       .then(data => {
-        if (data && data.nodes && data.zones) {
+        if (data.nodes && data.zones) {
           setLayoutNodes(data.nodes);
           setLayoutZones(data.zones);
         }
       })
-      .catch(err => console.error('Error loading layout:', err))
-      .finally(() => setIsLoadingLayout(false));
-  }, []);
-
-  const toggleEditMode = async () => {
-    if (isEditMode) {
-      // Saving when exiting edit mode
-      try {
-        await fetch('/api/layout', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ nodes: layoutNodes, zones: layoutZones })
-        });
-      } catch (err) {
-        console.error('Error saving layout:', err);
-      }
-    }
-    setIsEditMode(!isEditMode);
-  };
+      .catch(console.error);
+  }, [isAuthenticated]);
   
   // Drag & Edit State
   const [dragState, setDragState] = useState<{id: string, type: 'node'|'zone', startX: number, startY: number, initialX: number, initialY: number} | null>(null);
@@ -291,10 +276,28 @@ export default function App() {
     e.preventDefault();
     if (username === 'gugliama' && password === 'superman94') {
       setIsAuthenticated(true);
+      localStorage.setItem('server_panel_auth', 'true');
       setLoginError(false);
     } else {
       setLoginError(true);
     }
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    localStorage.removeItem('server_panel_auth');
+  };
+
+  const toggleEditMode = () => {
+    if (isEditMode) {
+      // Guardar cambios en el backend al salir del modo edición
+      fetch('/api/layout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodes: layoutNodes, zones: layoutZones })
+      }).catch(console.error);
+    }
+    setIsEditMode(!isEditMode);
   };
 
   if (!isAuthenticated) {
@@ -428,6 +431,14 @@ export default function App() {
               <span className="text-xs font-mono text-[#8e9299] uppercase tracking-widest">Estado: <span className="text-[#00ff9d] font-bold">CORRECTO</span></span>
             </div>
           )}
+
+          <button 
+            onClick={handleLogout}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-all text-sm font-bold ml-2"
+            title="Cerrar Sesión"
+          >
+            <LogOut size={16} />
+          </button>
         </div>
       </header>
 
