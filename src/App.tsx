@@ -178,11 +178,26 @@ export default function App() {
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [selectedServerTitle, setSelectedServerTitle] = useState<string>('');
   const [showAlerts, setShowAlerts] = useState(false);
+  const [dismissedAlerts, setDismissedAlerts] = useState<Record<string, string>>(() => {
+    const saved = localStorage.getItem('dismissed_alerts');
+    return saved ? JSON.parse(saved) : {};
+  });
+
+  // Save dismissals to localStorage
+  useEffect(() => {
+    localStorage.setItem('dismissed_alerts', JSON.stringify(dismissedAlerts));
+  }, [dismissedAlerts]);
+
+  const handleDismissAlert = (e: React.MouseEvent, alertId: string) => {
+    e.stopPropagation();
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    setDismissedAlerts(prev => ({ ...prev, [alertId]: today }));
+  };
 
   const selectedServer = selectedServerId ? servers.find(s => s.id === selectedServerId) : null;
 
   // Derive alerts from servers state
-  const alerts = servers.flatMap(server => {
+  const allAlerts = servers.flatMap(server => {
     const serverAlerts = [];
     const name = server.name || server.id;
 
@@ -229,6 +244,10 @@ export default function App() {
     }
     return serverAlerts;
   });
+
+  // Filter out alerts dismissed today
+  const today = new Date().toISOString().split('T')[0];
+  const alerts = allAlerts.filter(alert => dismissedAlerts[alert.id] !== today);
 
   useEffect(() => {
     if (selectedServer) {
@@ -585,7 +604,16 @@ export default function App() {
                             <div className="flex-1">
                               <div className="flex justify-between items-start mb-1">
                                 <h4 className="text-xs font-bold text-white">{alert.title}</h4>
-                                <span className="text-[9px] font-mono text-[#8e9299]">{alert.timestamp}</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[9px] font-mono text-[#8e9299]">{alert.timestamp}</span>
+                                  <button 
+                                    onClick={(e) => handleDismissAlert(e, alert.id)}
+                                    className="p-1 hover:bg-white/10 rounded text-[#8e9299] hover:text-white transition-colors"
+                                    title="Ocultar por hoy"
+                                  >
+                                    <X size={10} />
+                                  </button>
+                                </div>
                               </div>
                               <p className="text-[11px] text-[#8e9299] leading-relaxed">{alert.message}</p>
                             </div>
