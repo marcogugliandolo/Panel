@@ -180,6 +180,15 @@ export default function App() {
 
   const selectedServer = selectedServerId ? servers.find(s => s.id === selectedServerId) : null;
 
+  useEffect(() => {
+    if (selectedServer) {
+      console.log(`[MODAL] Servidor seleccionado: ${selectedServerId}`, {
+        hasRealStats: !!selectedServer.realStats,
+        containerCount: selectedServer.realStats?.container_list?.length
+      });
+    }
+  }, [selectedServer, selectedServerId]);
+
   // Fetch layout from backend
   useEffect(() => {
     if (!isAuthenticated) return;

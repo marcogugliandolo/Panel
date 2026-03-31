@@ -71,6 +71,15 @@ async function startServer() {
   });
 
   // --- API Routes for Server Stats ---
+  app.get('/api/debug/db', (req, res) => {
+    try {
+      const stats = db.prepare('SELECT * FROM server_stats').all();
+      res.json(stats);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.get('/api/stats', (req, res) => {
     try {
       const stats = db.prepare('SELECT * FROM server_stats').all();
@@ -79,6 +88,7 @@ async function startServer() {
         ...s,
         container_list: s.container_list ? JSON.parse(s.container_list) : []
       }));
+      console.log(`[GET STATS] Enviando ${parsedStats.length} estadísticas`);
       res.json(parsedStats);
     } catch (error) {
       console.error('Error fetching stats:', error);
@@ -91,6 +101,14 @@ async function startServer() {
       const serverId = req.params.id;
       const { cpu, ram, appsTotal, appsRunning, containerList } = req.body;
       const now = Date.now();
+
+      console.log(`[POST STATS] Recibido de ${serverId}:`, { 
+        cpu, 
+        ram, 
+        appsTotal, 
+        appsRunning, 
+        containers: containerList ? (Array.isArray(containerList) ? containerList.length : 'not an array') : 'missing' 
+      });
 
       db.prepare(`
         INSERT INTO server_stats (server_id, cpu_usage, ram_usage, apps_total, apps_running, container_list, last_updated)
