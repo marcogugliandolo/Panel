@@ -22,6 +22,16 @@ export interface Server {
   uptime: string;
   containers?: Container[];
   vms?: number; // For Proxmox
+  realStats?: {
+    cpu_usage: number;
+    ram_usage: number;
+    disk_usage: number;
+    apps_total: number;
+    apps_running: number;
+    uptime: string;
+    last_update: string;
+    container_list?: string[];
+  };
 }
 
 export interface MetricPoint {

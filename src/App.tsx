@@ -80,9 +80,10 @@ interface SchemaNodeProps {
   isEditMode: boolean;
   onPointerDown: (e: React.PointerEvent, id: string, type: 'node', x: number, y: number) => void;
   onEdit: (item: any, type: 'node') => void;
+  onClick: () => void;
 }
 
-const SchemaNode: React.FC<SchemaNodeProps> = ({ node, status, stats, isEditMode, onPointerDown, onEdit }) => {
+const SchemaNode: React.FC<SchemaNodeProps> = ({ node, status, stats, isEditMode, onPointerDown, onEdit, onClick }) => {
   const color = status === 'online' ? '#00ff9d' : status === 'warning' ? '#ffcc00' : '#ff4444';
   const Icon = ICON_MAP[node.icon] || ServerIcon;
 
@@ -91,12 +92,13 @@ const SchemaNode: React.FC<SchemaNodeProps> = ({ node, status, stats, isEditMode
       className={cn(
         "absolute z-10 flex flex-col rounded-xl overflow-hidden transition-all duration-300",
         "bg-[#0a0a0c]/80 backdrop-blur-xl border border-white/10",
-        !isEditMode && "hover:border-white/30 hover:shadow-[0_0_30px_rgba(0,0,0,0.8)] hover:scale-105 hover:z-20 group",
+        !isEditMode && "hover:border-white/30 hover:shadow-[0_0_30px_rgba(0,0,0,0.8)] hover:scale-105 hover:z-20 group cursor-pointer",
         isEditMode && "cursor-move ring-2 ring-white/30 shadow-[0_0_20px_rgba(255,255,255,0.1)]",
         node.isGateway ? "w-40" : "w-48"
       )}
       style={{ left: `${node.x}%`, top: `${node.y}%`, transform: 'translate(-50%, -50%)', boxShadow: `0 8px 32px rgba(0,0,0,0.4)` }}
       onPointerDown={(e) => onPointerDown(e, node.id, 'node', node.x, node.y)}
+      onClick={() => !isEditMode && onClick()}
     >
       {isEditMode && (
         <button 
@@ -173,6 +175,7 @@ export default function App() {
   const [isEditMode, setIsEditMode] = useState(false);
   const [layoutNodes, setLayoutNodes] = useState(INITIAL_LAYOUT_NODES);
   const [layoutZones, setLayoutZones] = useState(INITIAL_LAYOUT_ZONES);
+  const [selectedServer, setSelectedServer] = useState<Server | null>(null);
 
   // Fetch layout from backend
   useEffect(() => {
@@ -572,6 +575,7 @@ export default function App() {
                             isEditMode={isEditMode}
                             onPointerDown={handlePointerDown}
                             onEdit={(item) => setEditingItem({ item, type: 'node' })}
+                            onClick={() => server && setSelectedServer(server)}
                           />
                         </div>
                       );
@@ -646,6 +650,54 @@ export default function App() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Container Details Modal */}
+      {selectedServer && (
+        <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#151619] border border-white/10 rounded-xl p-6 w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
+            <div className="flex justify-between items-center mb-6">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-white/5 border border-white/10">
+                  <ServerIcon size={20} className="text-[#00ff9d]" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">{selectedServer.name}</h3>
+                  <p className="text-xs text-[#8e9299] font-mono uppercase tracking-widest">Lista de Contenedores</p>
+                </div>
+              </div>
+              <button onClick={() => setSelectedServer(null)} className="text-[#8e9299] hover:text-white transition-colors">
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+              <div className="grid grid-cols-1 gap-2">
+                {selectedServer.realStats?.container_list && selectedServer.realStats.container_list.length > 0 ? (
+                  selectedServer.realStats.container_list.map((container: string, idx: number) => (
+                    <div key={idx} className="flex items-center gap-3 p-3 bg-white/5 border border-white/5 rounded-lg hover:bg-white/10 transition-colors group">
+                      <div className="w-2 h-2 rounded-full bg-[#00ff9d] shadow-[0_0_8px_#00ff9d]" />
+                      <span className="text-sm font-mono text-white/90 group-hover:text-white">{container}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-center py-12 bg-white/5 border border-dashed border-white/10 rounded-xl">
+                    <p className="text-[#8e9299] text-sm font-mono">No se encontraron contenedores activos</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-6 pt-6 border-t border-white/5 flex justify-end">
+              <button 
+                onClick={() => setSelectedServer(null)}
+                className="px-6 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-white text-sm font-bold transition-colors"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

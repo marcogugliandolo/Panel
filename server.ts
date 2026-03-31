@@ -32,9 +32,17 @@ async function startServer() {
       ram_usage REAL,
       apps_total INTEGER,
       apps_running INTEGER,
+      container_list TEXT,
       last_updated INTEGER
     );
   `);
+
+  // Migración simple si la columna no existe
+  try {
+    db.prepare('ALTER TABLE server_stats ADD COLUMN container_list TEXT').run();
+  } catch (e) {
+    // La columna ya existe
+  }
 
   // --- API Routes for Layout ---
   app.get('/api/layout', (req, res) => {
@@ -66,7 +74,12 @@ async function startServer() {
   app.get('/api/stats', (req, res) => {
     try {
       const stats = db.prepare('SELECT * FROM server_stats').all();
-      res.json(stats);
+      // Parsear container_list de string a array
+      const parsedStats = stats.map((s: any) => ({
+        ...s,
+        container_list: s.container_list ? JSON.parse(s.container_list) : []
+      }));
+      res.json(parsedStats);
     } catch (error) {
       console.error('Error fetching stats:', error);
       res.status(500).json({ error: 'Database error' });
@@ -76,19 +89,20 @@ async function startServer() {
   app.post('/api/stats/:id', (req, res) => {
     try {
       const serverId = req.params.id;
-      const { cpu, ram, appsTotal, appsRunning } = req.body;
+      const { cpu, ram, appsTotal, appsRunning, containerList } = req.body;
       const now = Date.now();
 
       db.prepare(`
-        INSERT INTO server_stats (server_id, cpu_usage, ram_usage, apps_total, apps_running, last_updated)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO server_stats (server_id, cpu_usage, ram_usage, apps_total, apps_running, container_list, last_updated)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(server_id) DO UPDATE SET
           cpu_usage = excluded.cpu_usage,
           ram_usage = excluded.ram_usage,
           apps_total = excluded.apps_total,
           apps_running = excluded.apps_running,
+          container_list = excluded.container_list,
           last_updated = excluded.last_updated
-      `).run(serverId, cpu, ram, appsTotal, appsRunning, now);
+      `).run(serverId, cpu, ram, appsTotal, appsRunning, JSON.stringify(containerList || []), now);
 
       res.json({ success: true });
     } catch (error) {
