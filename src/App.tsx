@@ -217,21 +217,24 @@ export default function App() {
         const res = await fetch('/api/stats');
         const data = await res.json();
         
-        setServers(prevServers => prevServers.map(server => {
-          const stat = data.find((s: any) => s.server_id === server.id);
-          if (stat) {
-            // Si no hay actualización en 8 horas (28800000 ms), marcar como offline
-            const isOffline = (Date.now() - stat.last_updated) > 28800000;
-            return {
-              ...server,
-              cpuUsage: stat.cpu_usage,
-              ramUsage: stat.ram_usage,
-              status: isOffline ? 'offline' : 'online',
-              realStats: stat // Guardamos los datos reales para usarlos en getStats
-            };
-          }
-          return server;
-        }));
+        setServers(prevServers => {
+          const newServers = prevServers.map(server => {
+            const stat = data.find((s: any) => s.server_id === server.id);
+            if (stat) {
+              const isOffline = (Date.now() - stat.last_updated) > 28800000;
+              return {
+                ...server,
+                cpuUsage: stat.cpu_usage,
+                ramUsage: stat.ram_usage,
+                status: isOffline ? 'offline' : 'online',
+                realStats: stat
+              };
+            }
+            return server;
+          });
+          console.log('[FETCH] Servers updated:', newServers.map(s => ({ id: s.id, hasStats: !!s.realStats, containers: s.realStats?.container_list?.length })));
+          return newServers;
+        });
       } catch (error) {
         console.error("Error fetching stats:", error);
       }
@@ -679,7 +682,11 @@ export default function App() {
                 </div>
                 <div>
                   <h3 className="text-lg font-bold text-white">{selectedServerTitle}</h3>
-                  <p className="text-xs text-[#8e9299] font-mono uppercase tracking-widest">Lista de Contenedores</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-[10px] text-[#8e9299] font-mono uppercase tracking-widest">ID: {selectedServerId}</p>
+                    <span className="text-[10px] text-[#8e9299]">•</span>
+                    <p className="text-[10px] text-[#8e9299] font-mono uppercase tracking-widest">Lista de Contenedores</p>
+                  </div>
                 </div>
               </div>
               <button onClick={() => setSelectedServerId(null)} className="text-[#8e9299] hover:text-white transition-colors">
@@ -689,16 +696,24 @@ export default function App() {
 
             <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
               <div className="grid grid-cols-1 gap-2">
-                {selectedServer.realStats?.container_list && selectedServer.realStats.container_list.length > 0 ? (
-                  selectedServer.realStats.container_list.map((container: string, idx: number) => (
-                    <div key={idx} className="flex items-center gap-3 p-3 bg-white/5 border border-white/5 rounded-lg hover:bg-white/10 transition-colors group">
-                      <div className="w-2 h-2 rounded-full bg-[#00ff9d] shadow-[0_0_8px_#00ff9d]" />
-                      <span className="text-sm font-mono text-white/90 group-hover:text-white">{container}</span>
+                {selectedServer.realStats ? (
+                  selectedServer.realStats.container_list && selectedServer.realStats.container_list.length > 0 ? (
+                    selectedServer.realStats.container_list.map((container: string, idx: number) => (
+                      <div key={idx} className="flex items-center gap-3 p-3 bg-white/5 border border-white/5 rounded-lg hover:bg-white/10 transition-colors group">
+                        <div className="w-2 h-2 rounded-full bg-[#00ff9d] shadow-[0_0_8px_#00ff9d]" />
+                        <span className="text-sm font-mono text-white/90 group-hover:text-white">{container}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-center py-12 bg-white/5 border border-dashed border-white/10 rounded-xl">
+                      <p className="text-[#8e9299] text-sm font-mono">No se encontraron contenedores activos</p>
+                      <p className="text-[10px] text-[#8e9299]/50 font-mono mt-2 uppercase">El servidor está enviando datos pero la lista está vacía</p>
                     </div>
-                  ))
+                  )
                 ) : (
-                  <div className="text-center py-12 bg-white/5 border border-dashed border-white/10 rounded-xl">
-                    <p className="text-[#8e9299] text-sm font-mono">No se encontraron contenedores activos</p>
+                  <div className="text-center py-12 bg-red-500/5 border border-dashed border-red-500/20 rounded-xl">
+                    <p className="text-red-400 text-sm font-mono">Sin datos de este servidor</p>
+                    <p className="text-[10px] text-red-400/50 font-mono mt-2 uppercase">Verifica que el script de monitoreo esté funcionando</p>
                   </div>
                 )}
               </div>

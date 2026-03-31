@@ -84,10 +84,19 @@ async function startServer() {
     try {
       const stats = db.prepare('SELECT * FROM server_stats').all();
       // Parsear container_list de string a array
-      const parsedStats = stats.map((s: any) => ({
-        ...s,
-        container_list: s.container_list ? JSON.parse(s.container_list) : []
-      }));
+      const parsedStats = stats.map((s: any) => {
+        let containers = [];
+        try {
+          containers = s.container_list ? JSON.parse(s.container_list) : [];
+          if (!Array.isArray(containers)) containers = [];
+        } catch (e) {
+          console.error(`Error parsing container_list for ${s.server_id}:`, e);
+        }
+        return {
+          ...s,
+          container_list: containers
+        };
+      });
       console.log(`[GET STATS] Enviando ${parsedStats.length} estadísticas`);
       res.json(parsedStats);
     } catch (error) {
@@ -99,7 +108,8 @@ async function startServer() {
   app.post('/api/stats/:id', (req, res) => {
     try {
       const serverId = req.params.id;
-      const { cpu, ram, appsTotal, appsRunning, containerList } = req.body;
+      const { cpu, ram, appsTotal, appsRunning, containerList, container_list } = req.body;
+      const finalContainerList = containerList || container_list || [];
       const now = Date.now();
 
       console.log(`[POST STATS] Recibido de ${serverId}:`, { 
@@ -107,7 +117,7 @@ async function startServer() {
         ram, 
         appsTotal, 
         appsRunning, 
-        containers: containerList ? (Array.isArray(containerList) ? containerList.length : 'not an array') : 'missing' 
+        containers: Array.isArray(finalContainerList) ? finalContainerList.length : 'not an array'
       });
 
       db.prepare(`
@@ -120,7 +130,7 @@ async function startServer() {
           apps_running = excluded.apps_running,
           container_list = excluded.container_list,
           last_updated = excluded.last_updated
-      `).run(serverId, cpu, ram, appsTotal, appsRunning, JSON.stringify(containerList || []), now);
+      `).run(serverId, cpu, ram, appsTotal, appsRunning, JSON.stringify(finalContainerList), now);
 
       res.json({ success: true });
     } catch (error) {
