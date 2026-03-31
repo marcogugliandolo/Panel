@@ -175,7 +175,7 @@ export default function App() {
   const [isEditMode, setIsEditMode] = useState(false);
   const [layoutNodes, setLayoutNodes] = useState(INITIAL_LAYOUT_NODES);
   const [layoutZones, setLayoutZones] = useState(INITIAL_LAYOUT_ZONES);
-  const [selectedServer, setSelectedServer] = useState<Server | null>(null);
+  const [selectedServer, setSelectedServer] = useState<{server: Server, title: string} | null>(null);
 
   // Fetch layout from backend
   useEffect(() => {
@@ -575,7 +575,7 @@ export default function App() {
                             isEditMode={isEditMode}
                             onPointerDown={handlePointerDown}
                             onEdit={(item) => setEditingItem({ item, type: 'node' })}
-                            onClick={() => server && setSelectedServer(server)}
+                            onClick={() => server && setSelectedServer({ server, title: node.title })}
                           />
                         </div>
                       );
@@ -663,7 +663,7 @@ export default function App() {
                   <ServerIcon size={20} className="text-[#00ff9d]" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-white">{selectedServer.name}</h3>
+                  <h3 className="text-lg font-bold text-white">{selectedServer.title}</h3>
                   <p className="text-xs text-[#8e9299] font-mono uppercase tracking-widest">Lista de Contenedores</p>
                 </div>
               </div>
@@ -674,8 +674,8 @@ export default function App() {
 
             <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
               <div className="grid grid-cols-1 gap-2">
-                {selectedServer.realStats?.container_list && selectedServer.realStats.container_list.length > 0 ? (
-                  selectedServer.realStats.container_list.map((container: string, idx: number) => (
+                {selectedServer.server.realStats?.container_list && selectedServer.server.realStats.container_list.length > 0 ? (
+                  selectedServer.server.realStats.container_list.map((container: string, idx: number) => (
                     <div key={idx} className="flex items-center gap-3 p-3 bg-white/5 border border-white/5 rounded-lg hover:bg-white/10 transition-colors group">
                       <div className="w-2 h-2 rounded-full bg-[#00ff9d] shadow-[0_0_8px_#00ff9d]" />
                       <span className="text-sm font-mono text-white/90 group-hover:text-white">{container}</span>
