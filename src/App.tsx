@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Globe, Cloud, Router, Server as ServerIcon, Cpu, ShieldCheck, ZoomIn, ZoomOut, Maximize, Edit2, Save, X, Settings2, GripHorizontal, Lock, User, LogIn, LogOut } from 'lucide-react';
+import { Activity, Globe, Cloud, Router, Server as ServerIcon, Cpu, ShieldCheck, ZoomIn, ZoomOut, Maximize, Edit2, Save, X, Settings2, GripHorizontal, Lock, User, LogIn, LogOut, Bell, AlertTriangle, Info } from 'lucide-react';
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import { cn } from './lib/utils';
 import { Server } from './types';
@@ -177,8 +177,58 @@ export default function App() {
   const [layoutZones, setLayoutZones] = useState(INITIAL_LAYOUT_ZONES);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [selectedServerTitle, setSelectedServerTitle] = useState<string>('');
+  const [showAlerts, setShowAlerts] = useState(false);
 
   const selectedServer = selectedServerId ? servers.find(s => s.id === selectedServerId) : null;
+
+  // Derive alerts from servers state
+  const alerts = servers.flatMap(server => {
+    const serverAlerts = [];
+    const name = server.name || server.id;
+
+    if (server.status === 'offline') {
+      serverAlerts.push({ 
+        id: `${server.id}-offline`, 
+        type: 'error', 
+        title: 'Servidor Offline',
+        message: `El nodo ${name} no responde.`, 
+        serverId: server.id,
+        timestamp: new Date().toLocaleTimeString()
+      });
+    } else {
+      if (server.cpuUsage > 80) {
+        serverAlerts.push({ 
+          id: `${server.id}-cpu`, 
+          type: 'warning', 
+          title: 'CPU Crítica',
+          message: `${name}: Uso de CPU al ${server.cpuUsage.toFixed(1)}%`, 
+          serverId: server.id,
+          timestamp: new Date().toLocaleTimeString()
+        });
+      }
+      if (server.ramUsage > 85) {
+        serverAlerts.push({ 
+          id: `${server.id}-ram`, 
+          type: 'warning', 
+          title: 'RAM Crítica',
+          message: `${name}: Uso de RAM al ${server.ramUsage.toFixed(1)}%`, 
+          serverId: server.id,
+          timestamp: new Date().toLocaleTimeString()
+        });
+      }
+      if (server.realStats && server.realStats.apps_running < server.realStats.apps_total) {
+        serverAlerts.push({ 
+          id: `${server.id}-apps`, 
+          type: 'warning', 
+          title: 'Contenedores Caídos',
+          message: `${name}: ${server.realStats.apps_total - server.realStats.apps_running} contenedores detenidos`, 
+          serverId: server.id,
+          timestamp: new Date().toLocaleTimeString()
+        });
+      }
+    }
+    return serverAlerts;
+  });
 
   useEffect(() => {
     if (selectedServer) {
@@ -478,6 +528,83 @@ export default function App() {
         </div>
         
         <div className="flex items-center gap-2 md:gap-4">
+          {/* Alerts Bell */}
+          {!isEditMode && (
+            <div className="relative">
+              <button 
+                onClick={() => setShowAlerts(!showAlerts)}
+                className={cn(
+                  "p-2 rounded-lg border transition-all relative",
+                  showAlerts ? "bg-white/10 border-white/20 text-white" : "bg-white/5 border-white/10 text-[#8e9299] hover:text-white"
+                )}
+              >
+                <Bell size={20} />
+                {alerts.length > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-[#0a0a0c] animate-bounce">
+                    {alerts.length}
+                  </span>
+                )}
+              </button>
+
+              {/* Alerts Dropdown */}
+              {showAlerts && (
+                <div className="absolute top-full right-0 mt-3 w-80 bg-[#151619] border border-white/10 rounded-xl shadow-2xl z-[60] overflow-hidden">
+                  <div className="p-4 border-b border-white/5 flex justify-between items-center bg-white/5">
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                      <Bell size={14} className="text-blue-400" />
+                      Notificaciones
+                    </h3>
+                    <span className="text-[10px] font-mono text-[#8e9299] uppercase tracking-widest">{alerts.length} Activas</span>
+                  </div>
+                  
+                  <div className="max-h-[400px] overflow-y-auto custom-scrollbar">
+                    {alerts.length > 0 ? (
+                      alerts.map(alert => (
+                        <div 
+                          key={alert.id} 
+                          className={cn(
+                            "p-4 border-b border-white/5 last:border-0 hover:bg-white/5 transition-colors cursor-pointer",
+                            alert.type === 'error' ? "border-l-2 border-l-red-500" : "border-l-2 border-l-yellow-500"
+                          )}
+                          onClick={() => {
+                            const node = layoutNodes.find(n => n.serverId === alert.serverId);
+                            if (node) {
+                              setSelectedServerId(alert.serverId);
+                              setSelectedServerTitle(node.title);
+                            }
+                            setShowAlerts(false);
+                          }}
+                        >
+                          <div className="flex gap-3">
+                            <div className={cn(
+                              "p-2 rounded-lg shrink-0",
+                              alert.type === 'error' ? "bg-red-500/10 text-red-500" : "bg-yellow-500/10 text-yellow-500"
+                            )}>
+                              {alert.type === 'error' ? <AlertTriangle size={16} /> : <Info size={16} />}
+                            </div>
+                            <div className="flex-1">
+                              <div className="flex justify-between items-start mb-1">
+                                <h4 className="text-xs font-bold text-white">{alert.title}</h4>
+                                <span className="text-[9px] font-mono text-[#8e9299]">{alert.timestamp}</span>
+                              </div>
+                              <p className="text-[11px] text-[#8e9299] leading-relaxed">{alert.message}</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="p-12 text-center">
+                        <ShieldCheck size={32} className="mx-auto text-[#00ff9d] mb-3 opacity-20" />
+                        <p className="text-sm text-[#8e9299] font-mono uppercase tracking-widest">Todo correcto</p>
+                        <p className="text-[10px] text-[#8e9299]/50 mt-1">No hay alertas activas en este momento</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <button 
             onClick={toggleEditMode}
             className={cn(
