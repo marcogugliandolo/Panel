@@ -403,13 +403,28 @@ export default function App() {
     ];
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (username === 'gugliama' && password === 'superman94') {
-      setIsAuthenticated(true);
-      localStorage.setItem('server_panel_auth', 'true');
-      setLoginError(false);
-    } else {
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ username, password })
+      });
+      
+      const data = await res.json();
+      
+      if (res.ok && data.success) {
+        setIsAuthenticated(true);
+        localStorage.setItem('server_panel_auth', 'true');
+        setLoginError(false);
+      } else {
+        setLoginError(true);
+      }
+    } catch (error) {
+      console.error('Error durante el inicio de sesión:', error);
       setLoginError(true);
     }
   };

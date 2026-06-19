@@ -139,6 +139,24 @@ async function startServer() {
     }
   });
 
+  app.post('/api/login', (req, res) => {
+    const { username, password } = req.body;
+    
+    // Obtener las credenciales estrictamente de las variables de entorno
+    const validUsername = process.env.PANEL_USERNAME;
+    const validPassword = process.env.PANEL_PASSWORD;
+    
+    if (!validUsername || !validPassword) {
+      return res.status(500).json({ success: false, error: 'El panel necesita configurar las variables de entorno para el usuario y contraseña' });
+    }
+    
+    if (username === validUsername && password === validPassword) {
+      res.json({ success: true });
+    } else {
+      res.status(401).json({ success: false, error: 'Credenciales inválidas' });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
