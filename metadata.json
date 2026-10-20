@@ -1,5 +1,0 @@
-{
-  "name": "Server Panel",
-  "description": "A professional SCADA-style dashboard for monitoring Raspberry Pi, VPS, and Proxmox infrastructure with Docker container status.",
-  "requestFramePermissions": []
-}

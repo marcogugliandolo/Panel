@@ -1,0 +1,24 @@
+# Stack para Portainer (Stacks → Add stack → Repository) o `docker compose up -d --build`.
+# Las variables se definen en la sección "Environment variables" del stack en Portainer, o en un fichero .env.
+
+services:
+  panel:
+    build: .
+    image: server-panel:latest
+    container_name: server-panel
+    restart: unless-stopped
+    ports:
+      - "${PANEL_PORT:-3000}:3000"
+    environment:
+      PANEL_USERNAME: ${PANEL_USERNAME:-admin}
+      PANEL_PASSWORD: ${PANEL_PASSWORD:?Define PANEL_PASSWORD en las variables del stack}
+      STATS_TOKEN: ${STATS_TOKEN:-}
+      PORTAINER_URL: ${PORTAINER_URL:-}
+      PORTAINER_TOKEN: ${PORTAINER_TOKEN:-}
+      OFFLINE_AFTER_MINUTES: ${OFFLINE_AFTER_MINUTES:-5}
+      HISTORY_DAYS: ${HISTORY_DAYS:-30}
+    volumes:
+      - panel-data:/app/data
+
+volumes:
+  panel-data:
