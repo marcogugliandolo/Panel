@@ -29,6 +29,7 @@ export const MONITOR_META: Record<MonitorStatus, { label: string; tone: Tone }> 
 const STATE_LABELS: Record<string, string> = {
   running: 'En marcha',
   exited: 'Parado',
+  stopped: 'Detenido',
   restarting: 'Reiniciando',
   paused: 'En pausa',
   created: 'Creado',
