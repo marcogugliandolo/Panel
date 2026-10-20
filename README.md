@@ -79,27 +79,28 @@ Con `PORTAINER_URL` y `PORTAINER_TOKEN` configurados, vincula cada servidor con 
 
 ## Script de métricas
 
-`agent/enviar-metricas.sh` se ejecuta en cada servidor y envía CPU, RAM, disco, tiempo encendido y el estado de todos los contenedores (también los parados). Necesita `bash`, `curl` y `jq`; Docker es opcional.
+`agent/enviar-metricas.sh` se ejecuta cada minuto en cada servidor y envía CPU, RAM, disco, tiempo encendido y el estado de todos los contenedores Docker, también los parados. En Proxmox informa además de los contenedores LXC y las máquinas virtuales. Solo necesita `bash` y `curl`.
 
-Para actualizar un servidor que ya tiene el script antiguo en `/root/monitor.sh` (la línea de cron no cambia):
+### Instalarlo o actualizarlo en un servidor
+
+Como root, cambiando `rpi-1` por el id de ese servidor (`rpi-1`, `rpi-2`, `vps-oracle`, `vps-contabo`, `proxmox-node`):
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/marcogugliandolo/Panel/main/agent/enviar-metricas.sh -o /root/monitor.sh
-sudo chmod 700 /root/monitor.sh
+# 1. Localiza el script que ya ejecuta cron (si no hay ninguno, se usa /root/monitor.sh)
+F=$(grep -l "api/stats" /root/*.sh /usr/local/bin/* 2>/dev/null | head -1); F=${F:-/root/monitor.sh}; echo "$F"
 
-# Configuración de este servidor (el token, fuera del script)
-sudo tee /etc/server-panel.env > /dev/null <<'EOF'
-SERVER_ID=rpi-1
-PANEL_URL=https://panel.marcogugliandolo.com
-STATS_TOKEN=pega-aqui-el-mismo-token-del-panel
-EOF
-sudo chmod 600 /etc/server-panel.env
+# 2. Sustitúyelo por la versión nueva
+curl -fsSL https://raw.githubusercontent.com/marcogugliandolo/Panel/main/agent/enviar-metricas.sh -o "$F" && chmod 700 "$F"
 
-# Prueba manual
-sudo /root/monitor.sh
+# 3. Configuración de este servidor (el token queda fuera del script)
+printf 'SERVER_ID=%s\nPANEL_URL=%s\nSTATS_TOKEN=%s\n' rpi-1 https://panel.marcogugliandolo.com EL-TOKEN > /etc/server-panel.env
+chmod 600 /etc/server-panel.env
+
+# 4. Prueba: primero sin enviar nada, luego de verdad (debe responder "OK rpi-1: …")
+DRY_RUN=1 "$F" && "$F"
 ```
 
-En un servidor nuevo, añade a `/etc/crontab`:
+La línea de cron no cambia. En un servidor nuevo, añade a `/etc/crontab`:
 
 ```
 * * * * * root /root/monitor.sh > /dev/null 2>&1
@@ -107,7 +108,7 @@ En un servidor nuevo, añade a `/etc/crontab`:
 
 `SERVER_ID` tiene que coincidir con el **Id del servidor** del nodo en el esquema. Si un servidor envía datos con un id que no está en el esquema, aparece en la vista **Servidores** como «Sin ubicar en el esquema».
 
-El panel sigue aceptando el formato del script antiguo (solo nombres de contenedores en marcha), así que se pueden actualizar los servidores de uno en uno. Cuando todos usen el script nuevo con token, define `STATS_TOKEN` en el panel.
+El panel sigue aceptando el formato del script antiguo (solo nombres de contenedores en marcha), así que se pueden actualizar los servidores de uno en uno. El panel ignora el token hasta que se define `STATS_TOKEN`: cuando todos los servidores tengan el script nuevo, añádelo al stack.
 
 ### Formato del envío
 
