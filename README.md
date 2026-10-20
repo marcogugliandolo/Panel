@@ -24,6 +24,43 @@ Panel de control de la infraestructura propia: Raspberry Pi, VPS de Contabo y Or
 
 Los datos (esquema, historial, sesiones y webs) viven en el volumen `panel-data`, montado en `/app/data`. Si ya tenías el panel desplegado con otro volumen, usa ese mismo volumen en el compose (como `external: true`) o copia su `database.sqlite` al nuevo: las tablas antiguas se migran solas al arrancar y el esquema guardado se conserva.
 
+### Alternativa: contenedor que se actualiza al reiniciar
+
+Así está desplegado ahora en el Servidor-Oracle: cada vez que el contenedor arranca, descarga lo último de `main`, instala, compila y arranca. Reiniciar el contenedor = aplicar los cambios.
+
+```yaml
+services:
+  panel-app:
+    image: node:20-slim
+    container_name: panel_app
+    working_dir: /app
+    ports:
+      - "3004:3000"
+    volumes:
+      - ./panel_data:/app/data
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - PANEL_USERNAME=${PANEL_USERNAME}
+      - PANEL_PASSWORD=${PANEL_PASSWORD}
+      - PORTAINER_URL=${PORTAINER_URL}
+      - PORTAINER_TOKEN=${PORTAINER_TOKEN}
+      - STATS_TOKEN=${STATS_TOKEN}
+    restart: always
+    command: >
+      /bin/sh -c "
+      apt-get update && apt-get install -y git python3 make g++ &&
+      if [ ! -d '.git' ]; then git init && git remote add origin https://github.com/marcogugliandolo/Panel.git; fi &&
+      git fetch origin main &&
+      git reset --hard origin/main &&
+      npm install --include=dev &&
+      npm run build &&
+      npm run start
+      "
+```
+
+Los valores de `${...}` se rellenan en la sección **Environment variables** del stack en Portainer. Para probar una rama antes de fusionarla, cambia `main` por el nombre de la rama en las dos órdenes `git` y reinicia.
+
 ### Variables de entorno
 
 | Variable | Por defecto | Para qué sirve |
