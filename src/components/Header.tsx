@@ -77,7 +77,7 @@ export function Header({
   );
 
   return (
-    <header className="sticky top-0 z-40 flex min-h-[5rem] flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b border-white/10 bg-[#0a0a0c]/80 px-4 py-3 backdrop-blur-xl md:px-8">
+    <header className="sticky top-0 z-40 flex min-h-[5rem] flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b border-white/10 bg-[#0a0a0c]/80 px-4 py-3 backdrop-blur-xl md:px-8 [@media(max-height:500px)]:min-h-0 [@media(max-height:500px)]:py-2">
       <div className="flex min-w-0 items-center gap-3 md:gap-4">
         <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#00ff9d] to-[#00cc7d] text-black shadow-[0_0_20px_rgba(0,255,157,0.4)] md:size-10">
           <Activity className="size-5 md:size-6" strokeWidth={2.5} aria-hidden />
@@ -97,9 +97,9 @@ export function Header({
               </span>
             )}
           </h1>
-          <p className="mt-0.5 hidden font-mono text-xs tracking-wider text-[#8e9299] uppercase md:block">{SUBTITLES[view]}</p>
+          <p className="mt-0.5 hidden font-mono text-xs tracking-wider text-[#8e9299] uppercase md:block [@media(max-height:500px)]:hidden">{SUBTITLES[view]}</p>
         </div>
-        <div className="ml-2 hidden lg:block">{switcher}</div>
+        <div className="ml-2 hidden lg:block [@media(max-height:500px)]:block">{switcher}</div>
       </div>
 
       <div className="flex items-center gap-2 md:gap-4">
@@ -126,17 +126,17 @@ export function Header({
             title={isEditing ? 'Terminar Edición' : 'Editar Diseño'}
           >
             {isEditing ? <Save size={16} aria-hidden /> : <Edit2 size={16} aria-hidden />}
-            <span className="hidden md:inline">{isEditing ? 'Terminar Edición' : 'Editar Diseño'}</span>
+            <span className="hidden md:inline [@media(max-height:500px)]:hidden">{isEditing ? 'Terminar Edición' : 'Editar Diseño'}</span>
           </button>
         )}
 
         {!isEditing && (
           <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 md:px-4" role="status" aria-live="polite">
             <ShieldCheck size={16} className={state.color} aria-hidden />
-            <span className="hidden font-mono text-xs tracking-widest text-[#8e9299] uppercase md:inline">
+            <span aria-hidden className="hidden font-mono text-xs tracking-widest text-[#8e9299] uppercase md:inline [@media(max-height:500px)]:hidden">
               Estado: <span className={cn('font-bold', state.color)}>{state.label}</span>
             </span>
-            <span className="sr-only md:hidden">Estado: {state.label}</span>
+            <span className="sr-only">Estado: {state.label}</span>
           </div>
         )}
 
@@ -151,7 +151,7 @@ export function Header({
         </button>
       </div>
 
-      <div className="flex w-full justify-center lg:hidden">{switcher}</div>
+      <div className="flex w-full justify-center lg:hidden [@media(max-height:500px)]:hidden">{switcher}</div>
     </header>
   );
 }

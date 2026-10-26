@@ -1,6 +1,6 @@
-import { Cable, Edit3, Maximize, Plus, Save, SquareDashed, Trash2, Undo2, ZoomIn, ZoomOut } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { TransformComponent, TransformWrapper } from 'react-zoom-pan-pinch';
+import { Cable, Edit3, List, Maximize, Network, Plus, Save, SquareDashed, Trash2, Undo2, ZoomIn, ZoomOut } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { TransformComponent, TransformWrapper, type ReactZoomPanPinchRef } from 'react-zoom-pan-pinch';
 import { THRESHOLDS, type Layout, type LayoutNode, type LayoutZone, type PortainerEndpoint } from '../../../shared/types';
 import { nodeIcon } from '../../lib/icons';
 import { HEALTH_META, type ServerView, type Tone } from '../../lib/status';
@@ -57,13 +57,81 @@ export function TopologyCanvas({ layout, servers, endpoints, knownServerIds, onS
   const [editing, setEditing] = useState<Editing>(null);
   const [saving, setSaving] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef<ReactZoomPanPinchRef>(null);
   const toast = useToast();
 
-  // Escala inicial como siempre: tamaño real en el ordenador y alejado en el móvil.
-  const fitScale = useMemo(() => (window.innerWidth < 768 ? 0.3 : 1), []);
+  /*
+   * Ajuste a la pantalla: encaja zonas y nodos (no el lienzo entero) en el hueco disponible, sea un móvil en
+   * vertical o un monitor grande. Se repite al girar el móvil o cambiar el tamaño de la ventana, salvo que hayas
+   * movido o ampliado el esquema a mano (entonces solo si cambia el ancho, es decir, al girar o redimensionar).
+   */
+  const userMoved = useRef(false);
+  const lastSize = useRef({ w: 0, h: 0 });
+  const [frameSize, setFrameSize] = useState<{ w: number; h: number } | null>(null);
+  const [preferCanvas, setPreferCanvas] = useState(false);
+  const fitToScreen = useCallback((animation = 0) => {
+    const frame = frameRef.current, canvas = canvasRef.current, zoom = zoomRef.current;
+    if (!frame || !canvas || !zoom) return;
+    const fw = frame.clientWidth, fh = frame.clientHeight;
+    if (fw < 40 || fh < 40) return;
+    const cRect = canvas.getBoundingClientRect();
+    const current = cRect.width / CANVAS_WIDTH || 1;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    canvas.querySelectorAll<HTMLElement>('[data-fit]').forEach((el) => {
+      const r = el.getBoundingClientRect();
+      minX = Math.min(minX, (r.left - cRect.left) / current);
+      minY = Math.min(minY, (r.top - cRect.top) / current);
+      maxX = Math.max(maxX, (r.right - cRect.left) / current);
+      maxY = Math.max(maxY, (r.bottom - cRect.top) / current);
+    });
+    if (!Number.isFinite(minX)) [minX, minY, maxX, maxY] = [0, 0, CANVAS_WIDTH, CANVAS_HEIGHT];
+    const pad = fw < 640 ? 12 : 32;
+    const bw = maxX - minX, bh = maxY - minY;
+    const scale = Math.min(1.6, Math.max(0.15, Math.min((fw - pad * 2) / bw, (fh - pad * 2) / bh)));
+    zoom.setTransform(fw / 2 - (minX + bw / 2) * scale, fh / 2 - (minY + bh / 2) * scale, scale, animation);
+    userMoved.current = false;
+  }, []);
+
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    let timer = 0;
+    const ro = new ResizeObserver(() => {
+      const w = frame.clientWidth, h = frame.clientHeight;
+      setFrameSize((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
+      const widthChanged = Math.abs(w - lastSize.current.w) > 2;
+      const heightChanged = Math.abs(h - lastSize.current.h) > 2;
+      lastSize.current = { w, h };
+      if (!widthChanged && !heightChanged) return;
+      if (userMoved.current && !widthChanged) return; // p. ej. la barra del navegador del móvil al hacer scroll
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => fitToScreen(200), 120);
+    });
+    ro.observe(frame);
+    return () => {
+      ro.disconnect();
+      window.clearTimeout(timer);
+    };
+  }, [fitToScreen]);
 
   const isEditing = draft !== null;
   const current = draft ?? layout;
+
+  useLayoutEffect(() => {
+    const frame = frameRef.current;
+    if (frame) setFrameSize({ w: frame.clientWidth, h: frame.clientHeight });
+  }, []);
+
+  /*
+   * En pantallas donde el esquema entero quedaría demasiado pequeño para leerse (móvil, tablet en vertical,
+   * móvil en horizontal), se muestra en forma de lista: las mismas tarjetas, agrupadas por zonas y una debajo
+   * de otra. Para editar el diseño, o si lo pides, vuelve el esquema con zoom.
+   */
+  const box = useMemo(() => contentBox(current), [current]);
+  const readableScale = frameSize ? Math.min((frameSize.w - 24) / box.w, (frameSize.h - 24) / box.h) : 1;
+  const smallScreen = readableScale < 0.7;
+  const stacked = smallScreen && !isEditing && !preferCanvas;
 
   useEffect(() => {
     if (editingRequested && !draft) setDraft(structuredClone(layout));
@@ -175,18 +243,26 @@ export function TopologyCanvas({ layout, servers, endpoints, knownServerIds, onS
         : null;
 
   return (
-    <div className={cn('relative h-full w-full overflow-hidden', !isEditing && 'cursor-grab active:cursor-grabbing')}>
+    <div ref={frameRef} className={cn('relative h-full w-full overflow-hidden', !isEditing && !stacked && 'cursor-grab active:cursor-grabbing')}>
+      {stacked ? (
+        <StackedSchema layout={current} servers={servers} now={now} onSelect={onSelect} onShowCanvas={() => setPreferCanvas(true)} />
+      ) : (
       <TransformWrapper
-        initialScale={fitScale}
-        minScale={0.2}
+        ref={zoomRef}
+        initialScale={window.innerWidth < 768 ? 0.3 : 1}
+        minScale={0.15}
         maxScale={3}
         centerOnInit
+        onInit={() => requestAnimationFrame(() => fitToScreen(0))}
+        onPanningStop={() => (userMoved.current = true)}
+        onPinchingStop={() => (userMoved.current = true)}
+        onWheelStop={() => (userMoved.current = true)}
         limitToBounds={false}
         wheel={{ step: 0.08 }}
         doubleClick={{ disabled: true }}
         panning={{ disabled: isEditing }}
       >
-        {({ zoomIn, zoomOut, centerView }) => (
+        {({ zoomIn, zoomOut }) => (
           <>
             {/* Barra de edición */}
             <div className="absolute top-3 left-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center gap-2">
@@ -254,9 +330,10 @@ export function TopologyCanvas({ layout, servers, endpoints, knownServerIds, onS
             {/* Zoom */}
             <div className="absolute right-4 bottom-4 z-50 flex flex-col gap-2 md:right-8 md:bottom-8">
               {[
-                { label: 'Acercar', icon: <ZoomIn size={20} />, run: () => zoomIn() },
-                { label: 'Alejar', icon: <ZoomOut size={20} />, run: () => zoomOut() },
-                { label: 'Ajustar a la pantalla', icon: <Maximize size={20} />, run: () => centerView(fitScale) },
+                { label: 'Acercar', icon: <ZoomIn size={20} />, run: () => ((userMoved.current = true), zoomIn()) },
+                { label: 'Alejar', icon: <ZoomOut size={20} />, run: () => ((userMoved.current = true), zoomOut()) },
+                { label: 'Ajustar a la pantalla', icon: <Maximize size={20} />, run: () => fitToScreen(300) },
+                ...(smallScreen && !isEditing ? [{ label: 'Ver en lista', icon: <List size={20} />, run: () => setPreferCanvas(false) }] : []),
               ].map((b) => (
                 <button
                   key={b.label}
@@ -284,6 +361,7 @@ export function TopologyCanvas({ layout, servers, endpoints, knownServerIds, onS
                   return (
                     <div
                       key={zone.id}
+                      data-fit
                       className={cn(
                         'absolute rounded-2xl border bg-gradient-to-b from-white/5 to-transparent transition-colors',
                         isEditing && connectFrom === undefined ? 'cursor-move border-white/30 hover:bg-white/10' : 'pointer-events-none border-white/10',
@@ -387,6 +465,7 @@ export function TopologyCanvas({ layout, servers, endpoints, knownServerIds, onS
           </>
         )}
       </TransformWrapper>
+      )}
 
       {editing?.type === 'node' && (
         <NodeEditor
@@ -445,6 +524,7 @@ function SchemaNode({
   onPointerDown,
   onClick,
   onEdit,
+  inFlow = false,
 }: {
   node: LayoutNode;
   server: ServerView | null;
@@ -452,6 +532,8 @@ function SchemaNode({
   isConnecting: boolean;
   isConnectSource: boolean;
   now: number;
+  /** En la vista en lista: tarjeta en su sitio, sin posición absoluta. */
+  inFlow?: boolean;
   onPointerDown: (event: React.PointerEvent) => void;
   onClick: () => void;
   onEdit: () => void;
@@ -495,14 +577,15 @@ function SchemaNode({
         }
       }}
       className={cn(
-        'group absolute z-10 flex -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-white/10 bg-[#0a0a0c]/80 backdrop-blur-xl transition-all duration-300',
-        node.isGateway || !node.serverId ? 'w-40' : 'w-48',
+        'group flex flex-col overflow-hidden rounded-xl border border-white/10 bg-[#0a0a0c]/80 backdrop-blur-xl transition-all duration-300',
+        inFlow ? 'relative w-full' : cn('absolute z-10 -translate-x-1/2 -translate-y-1/2', node.isGateway || !node.serverId ? 'w-40' : 'w-48'),
         !isEditing && interactive && 'cursor-pointer hover:z-20 hover:scale-105 hover:border-white/30 hover:shadow-[0_0_30px_rgba(0,0,0,0.8)]',
         isEditing && !isConnecting && 'cursor-move shadow-[0_0_20px_rgba(255,255,255,0.1)] ring-2 ring-white/30',
         isEditing && isConnecting && 'cursor-crosshair ring-2 ring-info/40 hover:ring-info',
         isConnectSource && 'ring-2 ring-info',
       )}
-      style={{ left: `${node.x}%`, top: `${node.y}%`, boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}
+      data-fit={inFlow ? undefined : true}
+      style={inFlow ? { boxShadow: '0 8px 32px rgba(0,0,0,0.4)' } : { left: `${node.x}%`, top: `${node.y}%`, boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}
     >
       {isEditing && !isConnecting && (
         <button
@@ -560,6 +643,114 @@ function SchemaNode({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Caja (en px del lienzo) que ocupan zonas y nodos, para saber a qué escala se vería el esquema entero. */
+function contentBox(layout: Layout): { w: number; h: number } {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const z of layout.zones) {
+    x0 = Math.min(x0, (z.x / 100) * CANVAS_WIDTH);
+    y0 = Math.min(y0, (z.y / 100) * CANVAS_HEIGHT - 14);
+    x1 = Math.max(x1, ((z.x + z.width) / 100) * CANVAS_WIDTH);
+    y1 = Math.max(y1, ((z.y + z.height) / 100) * CANVAS_HEIGHT);
+  }
+  for (const n of layout.nodes) {
+    const hw = (n.isGateway || !n.serverId ? 160 : 192) / 2, hh = (n.serverId ? 176 : 86) / 2;
+    const cx = (n.x / 100) * CANVAS_WIDTH, cy = (n.y / 100) * CANVAS_HEIGHT;
+    x0 = Math.min(x0, cx - hw); x1 = Math.max(x1, cx + hw); y0 = Math.min(y0, cy - hh); y1 = Math.max(y1, cy + hh);
+  }
+  return Number.isFinite(x0) ? { w: Math.max(200, x1 - x0), h: Math.max(150, y1 - y0) } : { w: CANVAS_WIDTH, h: CANVAS_HEIGHT };
+}
+
+type Block = { kind: 'node'; key: string; y: number; x: number; node: LayoutNode } | { kind: 'zone'; key: string; y: number; x: number; zone: LayoutZone; nodes: LayoutNode[] };
+
+/** Agrupa los nodos por la zona que los contiene y ordena zonas y nodos sueltos de arriba abajo, como en el esquema. */
+function stackBlocks(layout: Layout): Block[] {
+  const byPos = (a: { x: number; y: number }, b: { x: number; y: number }) => a.y - b.y || a.x - b.x;
+  const inZone = new Map<string, LayoutNode[]>();
+  const loose: LayoutNode[] = [];
+  for (const n of layout.nodes) {
+    const zone = layout.zones
+      .filter((z) => n.x >= z.x && n.x <= z.x + z.width && n.y >= z.y && n.y <= z.y + z.height)
+      .sort((a, b) => a.width * a.height - b.width * b.height)[0];
+    if (zone) inZone.set(zone.id, [...(inZone.get(zone.id) ?? []), n]);
+    else loose.push(n);
+  }
+  const blocks: Block[] = [
+    ...loose.map((node) => ({ kind: 'node' as const, key: node.id, y: node.y, x: node.x, node })),
+    ...layout.zones
+      .filter((zone) => inZone.has(zone.id))
+      .map((zone) => ({ kind: 'zone' as const, key: zone.id, y: zone.y, x: zone.x, zone, nodes: inZone.get(zone.id)!.sort(byPos) })),
+  ];
+  return blocks.sort(byPos);
+}
+
+/** El esquema en forma de lista para pantallas pequeñas: mismas tarjetas y zonas, una debajo de otra. */
+function StackedSchema({
+  layout,
+  servers,
+  now,
+  onSelect,
+  onShowCanvas,
+}: {
+  layout: Layout;
+  servers: Map<string, ServerView>;
+  now: number;
+  onSelect: (key: string) => void;
+  onShowCanvas: () => void;
+}) {
+  const blocks = useMemo(() => stackBlocks(layout), [layout]);
+  const noop = () => {};
+  const card = (node: LayoutNode) => (
+    <SchemaNode
+      key={node.id}
+      node={node}
+      server={servers.get(node.id) ?? null}
+      isEditing={false}
+      isConnecting={false}
+      isConnectSource={false}
+      now={now}
+      onPointerDown={noop}
+      onClick={() => node.serverId && onSelect(node.id)}
+      onEdit={noop}
+      inFlow
+    />
+  );
+  return (
+    <div className="scrollbar-thin relative h-full overflow-y-auto overscroll-contain">
+      <div className="mx-auto flex max-w-2xl flex-col px-4 pt-6 pb-24">
+        {blocks.map((b, i) => {
+          const style = b.kind === 'zone' ? ZONE_STYLES[b.zone.color] ?? ZONE_STYLES.blue : null;
+          const Icon = b.kind === 'zone' ? nodeIcon(b.zone.icon) : null;
+          return (
+            <Fragment key={b.key}>
+              {i > 0 && <span aria-hidden className="mx-auto h-7 border-l-2 border-dashed border-[#00ff9d]/45" />}
+              {b.kind === 'node' ? (
+                <div className="mx-auto w-full max-w-[220px]">{card(b.node)}</div>
+              ) : (
+                <section aria-label={b.zone.title} className="relative rounded-2xl border border-white/10 bg-gradient-to-b from-white/5 to-transparent px-3 pt-6 pb-3">
+                  <div className="absolute -top-3 left-4 flex items-center gap-2 rounded-full border border-white/10 bg-[#0a0a0c] px-3 py-1 text-[9px] font-bold tracking-widest text-[#8e9299] uppercase shadow-lg">
+                    {Icon && <Icon size={12} className={style!.text} aria-hidden />}
+                    <span>{b.zone.title}</span>
+                  </div>
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3">{b.nodes.map(card)}</div>
+                </section>
+              )}
+            </Fragment>
+          );
+        })}
+      </div>
+      <button
+        type="button"
+        onClick={onShowCanvas}
+        aria-label="Ver el esquema completo"
+        title="Ver el esquema completo"
+        className="fixed right-4 bottom-4 z-40 rounded-xl border border-white/10 bg-[#151619]/90 p-3 text-[#8e9299] shadow-lg backdrop-blur transition-all hover:border-white/30 hover:bg-white/10 hover:text-white"
+      >
+        <Network size={20} aria-hidden />
+      </button>
     </div>
   );
 }
