@@ -168,6 +168,8 @@ export interface PanelAlert {
 export function buildAlerts(servers: ServerView[], monitors: Monitor[]): PanelAlert[] {
   const alerts: PanelAlert[] = [];
   for (const server of servers) {
+    // Un id que no está en el esquema y ya no envía datos es un id antiguo: no avisa (se olvida desde la Oficina).
+    if (!server.node && server.health === 'offline') continue;
     for (const problem of server.problems) {
       alerts.push({
         id: `server:${server.serverId}:${problem.id}`,
