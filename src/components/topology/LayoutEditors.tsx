@@ -2,6 +2,7 @@ import { Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import type { LayoutNode, LayoutZone, NodeIcon, PortainerEndpoint, ZoneColor } from '../../../shared/types';
 import { NODE_ICONS } from '../../lib/icons';
+import { isProxmoxHost } from '../../lib/status';
 import { Button, Dialog, Field, inputClass, Segmented } from '../ui';
 
 const ZONE_COLORS: { value: ZoneColor; label: string }[] = [
@@ -32,6 +33,7 @@ export function NodeEditor({
   const [kind, setKind] = useState<'server' | 'gateway'>(node.isGateway || (!node.serverId && !isNew) ? 'gateway' : 'server');
   const set = <K extends keyof LayoutNode>(key: K, value: LayoutNode[K]) => setDraft((d) => ({ ...d, [key]: value }));
   const serverIdValid = kind === 'gateway' || /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(draft.serverId ?? '');
+  const proxmox = isProxmoxHost({ serverId: draft.serverId, title: draft.title });
 
   function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -43,6 +45,7 @@ export function NodeEditor({
       delete result.portainerEndpointId;
     } else {
       delete result.isGateway;
+      if (proxmox) delete result.portainerEndpointId;
     }
     onSave(result);
   }
@@ -146,14 +149,20 @@ export function NodeEditor({
             </Field>
             <Field
               label="Entorno de Portainer"
-              hint={endpoints === null ? 'Portainer no está disponible: configura PORTAINER_URL y PORTAINER_TOKEN.' : 'Para ver y controlar sus contenedores desde el panel.'}
+              hint={
+                proxmox
+                  ? 'Proxmox no tiene el agente de Portainer: no se vincula.'
+                  : endpoints === null
+                    ? 'Portainer no está disponible: configura PORTAINER_URL y PORTAINER_TOKEN.'
+                    : 'Para ver y controlar sus contenedores desde el panel.'
+              }
             >
               {(id) => (
                 <select
                   id={id}
                   className={inputClass}
-                  disabled={endpoints === null}
-                  value={draft.portainerEndpointId ?? ''}
+                  disabled={endpoints === null || proxmox}
+                  value={proxmox ? '' : draft.portainerEndpointId ?? ''}
                   onChange={(e) => set('portainerEndpointId', e.target.value ? Number(e.target.value) : undefined)}
                 >
                   <option value="">Sin vincular</option>

@@ -127,6 +127,13 @@ function validateInput(body: any, partial = false): { value?: Partial<MonitorInp
   return { value };
 }
 
+/** Webs que se vigilan si la tabla está vacía (primer arranque). */
+const DEFAULT_WEBS: [string, string][] = [
+  ['vaixataxi.es', 'https://vaixataxi.es'],
+  ['panel.marcogugliandolo.com', 'https://panel.marcogugliandolo.com'],
+  ['portainer.marcogugliandolo.com', 'https://portainer.marcogugliandolo.com'],
+];
+
 export function createMonitorService(db: DB) {
   const running = new Set<number>();
   const lastRun = new Map<number, number>();
@@ -376,9 +383,21 @@ export function createMonitorService(db: DB) {
     res.json({ range, bucketMs: bucket, points, failures });
   });
 
+  /** La primera vez que arranca sin webs, vigila las de siempre (las atiende la recepción de la oficina). */
+  function seedDefaultWebs() {
+    const { total } = db.prepare('SELECT COUNT(*) AS total FROM monitors').get() as { total: number };
+    if (total > 0) return;
+    const insert = db.prepare(
+      'INSERT INTO monitors (name, url, interval_sec, timeout_ms, keyword, enabled, created_at) VALUES (?, ?, 60, 10000, NULL, 1, ?)',
+    );
+    for (const [name, url] of DEFAULT_WEBS) insert.run(name, url, Date.now());
+    console.log(`[monitors] Sin webs configuradas: se vigilan ${DEFAULT_WEBS.map(([name]) => name).join(', ')}`);
+  }
+
   return {
     router,
     start() {
+      seedDefaultWebs();
       tick();
       setInterval(tick, TICK_MS).unref();
     },

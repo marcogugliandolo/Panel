@@ -166,7 +166,13 @@ export function createPortainerRouter() {
       const containerId = containerParam(req.params.containerId);
       const action = req.params.action as ContainerAction;
       if (!ACTIONS.includes(action)) throw new PortainerError('Acción no permitida', 400);
-      await portainerFetch(`/endpoints/${endpointId}/docker/containers/${containerId}/${action}`, { method: 'POST' });
+      // Cuerpo `{}` explícito: sin él, Portainer reenvía la petición a Docker con longitud desconocida y Docker
+      // (API ≥ 1.24) rechaza el arranque con «starting container with non-empty request body».
+      await portainerFetch(`/endpoints/${endpointId}/docker/containers/${containerId}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
       console.log(`[portainer] ${res.locals.username} → ${action} ${containerId.slice(0, 12)} (entorno ${endpointId})`);
       res.json({ success: true });
     }),
