@@ -1,4 +1,4 @@
-import { ChevronLeft, Phone } from 'lucide-react';
+import { ChevronLeft, Phone, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { THRESHOLDS, type Monitor, type PortainerEndpoint, type PortainerStatus } from '../../../shared/types';
 import { api } from '../../api';
@@ -7,7 +7,7 @@ import { emitOrder, newOrderId, onOrder } from '../../lib/orders';
 import { containerStateMeta, HEALTH_META, isContainerProblem, MONITOR_META, type ServerView, type Tone } from '../../lib/status';
 import { cn } from '../../lib/utils';
 import { ServerDetails } from '../server/ServerDrawer';
-import { StatusBadge, useToast } from '../ui';
+import { Button, StatusBadge, useConfirm, useToast } from '../ui';
 import { createScene, lookFor, paintPortrait, RECEPTION_KEY, type FloorKey, type Scene, type SceneMode, type SceneServer } from './scene';
 
 const TEXT: Record<SceneMode, { title: string; hint: string; label: string }> = {
@@ -42,6 +42,8 @@ interface Props {
   portainer: PortainerStatus | null;
   endpoints: PortainerEndpoint[] | null;
   onLinkEndpoint: (nodeId: string, endpointId: number) => Promise<void>;
+  /** Tras olvidar un servidor que ya no está en el esquema. */
+  onForgotten: () => void;
   now: number;
 }
 
@@ -101,6 +103,7 @@ export function OfficeView({
   portainer,
   endpoints,
   onLinkEndpoint,
+  onForgotten,
   now,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -277,6 +280,16 @@ export function OfficeView({
                 onLinkEndpoint={onLinkEndpoint}
                 initialTab="containers"
               />
+              {!selected.node && selected.serverId && (
+                <ForgetButton
+                  serverId={selected.serverId}
+                  title={selected.title}
+                  onDone={() => {
+                    onSelect(null);
+                    onForgotten();
+                  }}
+                />
+              )}
             </div>
           ) : (
             <div className="space-y-4">
@@ -444,6 +457,41 @@ function ReceptionPanel({ monitors, onBack, onChange, now }: { monitors: Monitor
           })}
         </ul>
       )}
+    </div>
+  );
+}
+
+/** Para borrar servidores que ya no están en el esquema (ids antiguos que dejaron de enviar datos). */
+function ForgetButton({ serverId, title, onDone }: { serverId: string; title: string; onDone: () => void }) {
+  const confirm = useConfirm();
+  const toast = useToast();
+  async function forget() {
+    const ok = await confirm({
+      title: `Olvidar ${title}`,
+      message: (
+        <p>
+          No está en el esquema. Se borrarán sus métricas y su historial (<span className="font-mono text-ink">{serverId}</span>). Si su
+          script sigue enviando datos, volverá a aparecer.
+        </p>
+      ),
+      confirmLabel: 'Olvidar',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.forgetServer(serverId);
+      toast(`${title} olvidado`);
+      onDone();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'No se pudo borrar', 'bad');
+    }
+  }
+  return (
+    <div className="space-y-2 border-t border-line pt-4">
+      <p className="text-xs text-ink-3">Este servidor no está en el esquema: solo aparece porque alguna vez envió métricas con este id.</p>
+      <Button variant="danger" size="sm" icon={<Trash2 size={14} aria-hidden />} onClick={forget}>
+        Olvidar este servidor
+      </Button>
     </div>
   );
 }

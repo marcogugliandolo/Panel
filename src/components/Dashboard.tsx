@@ -151,6 +151,7 @@ export function Dashboard({ session, onLogout }: { session: Session; onLogout: (
             portainer={portainerQuery.data}
             endpoints={endpointsQuery.data}
             onLinkEndpoint={linkEndpoint}
+            onForgotten={() => void statsQuery.refresh()}
             now={now}
           />
         </div>
