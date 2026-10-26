@@ -2,12 +2,14 @@ import { Cable, Edit3, Maximize, Plus, Save, SquareDashed, Trash2, Undo2, ZoomIn
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { TransformComponent, TransformWrapper } from 'react-zoom-pan-pinch';
 import { THRESHOLDS, type Layout, type LayoutNode, type LayoutZone, type PortainerEndpoint } from '../../../shared/types';
-import { formatPercent, timeAgo } from '../../lib/format';
 import { nodeIcon } from '../../lib/icons';
-import { HEALTH_META, TONE_COLOR, type ServerView, type Tone } from '../../lib/status';
+import { HEALTH_META, type ServerView, type Tone } from '../../lib/status';
 import { cn } from '../../lib/utils';
-import { Button, IconButton, Meter, StatusDot, useToast } from '../ui';
+import { Button, useToast } from '../ui';
 import { NodeEditor, ZoneEditor } from './LayoutEditors';
+
+/** Colores del esquema tal como se ven en el panel desde el principio. */
+const CLASSIC_COLOR: Record<Tone, string> = { ok: '#00ff9d', warn: '#ffcc00', bad: '#ff4444', idle: '#6e737c' };
 
 const CANVAS_WIDTH = 1400;
 const CANVAS_HEIGHT = 800;
@@ -41,9 +43,14 @@ interface Props {
   onSave: (layout: Layout) => Promise<void>;
   onSelect: (nodeId: string) => void;
   now: number;
+  /** El modo edición se enciende y se apaga desde la cabecera (Editar Diseño / Terminar Edición). */
+  isEditing: boolean;
+  onEditingChange: (editing: boolean) => void;
+  /** Cada incremento pide guardar el borrador (Terminar Edición). */
+  saveSignal: number;
 }
 
-export function TopologyCanvas({ layout, servers, endpoints, knownServerIds, onSave, onSelect, now }: Props) {
+export function TopologyCanvas({ layout, servers, endpoints, knownServerIds, onSave, onSelect, now, isEditing: editingRequested, onEditingChange, saveSignal }: Props) {
   const [draft, setDraft] = useState<Layout | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [connectFrom, setConnectFrom] = useState<string | null | undefined>(undefined); // undefined = modo conectar apagado
@@ -52,14 +59,25 @@ export function TopologyCanvas({ layout, servers, endpoints, knownServerIds, onS
   const canvasRef = useRef<HTMLDivElement>(null);
   const toast = useToast();
 
-  // Escala para que el esquema quepa entero en pantalla al abrirlo (en el móvil, ~0,27).
-  const fitScale = useMemo(
-    () => Math.max(0.25, Math.min(1, (window.innerWidth - 24) / CANVAS_WIDTH, (window.innerHeight - 150) / CANVAS_HEIGHT)),
-    [],
-  );
+  // Escala inicial como siempre: tamaño real en el ordenador y alejado en el móvil.
+  const fitScale = useMemo(() => (window.innerWidth < 768 ? 0.3 : 1), []);
 
   const isEditing = draft !== null;
   const current = draft ?? layout;
+
+  useEffect(() => {
+    if (editingRequested && !draft) setDraft(structuredClone(layout));
+    if (!editingRequested && draft) {
+      setDraft(null);
+      setConnectFrom(undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingRequested]);
+
+  useEffect(() => {
+    if (saveSignal > 0 && draft) void save();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saveSignal]);
   const nodesById = useMemo(() => new Map(current.nodes.map((n) => [n.id, n])), [current.nodes]);
 
   // Arrastre de nodos, zonas y esquinas de zona.
@@ -134,6 +152,7 @@ export function TopologyCanvas({ layout, servers, endpoints, knownServerIds, onS
       await onSave(draft);
       setDraft(null);
       setConnectFrom(undefined);
+      onEditingChange(false);
       toast('Esquema guardado');
     } catch (error) {
       toast(error instanceof Error ? error.message : 'No se pudo guardar el esquema', 'bad');
@@ -142,11 +161,10 @@ export function TopologyCanvas({ layout, servers, endpoints, knownServerIds, onS
     }
   }
 
-  function wireTone(sourceId: string, targetId: string): { tone: Tone; animated: boolean } {
+  function wireTone(sourceId: string, targetId: string): { tone: Tone } {
     const target = servers.get(targetId) ?? servers.get(sourceId);
-    if (!target) return { tone: 'ok', animated: true };
-    const tone = HEALTH_META[target.health].tone;
-    return { tone, animated: target.health === 'online' || target.health === 'warning' };
+    if (!target || target.health === 'nodata') return { tone: 'ok' };
+    return { tone: HEALTH_META[target.health].tone };
   }
 
   const hint =
@@ -172,11 +190,7 @@ export function TopologyCanvas({ layout, servers, endpoints, knownServerIds, onS
           <>
             {/* Barra de edición */}
             <div className="absolute top-3 left-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center gap-2">
-              {!isEditing ? (
-                <Button size="sm" icon={<Edit3 size={14} aria-hidden />} onClick={() => setDraft(structuredClone(layout))}>
-                  Editar esquema
-                </Button>
-              ) : (
+              {isEditing && (
                 <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-line bg-surface-2/95 p-1.5 shadow-xl shadow-black/40 backdrop-blur">
                   <Button
                     size="sm"
@@ -221,10 +235,7 @@ export function TopologyCanvas({ layout, servers, endpoints, knownServerIds, onS
                     size="sm"
                     variant="ghost"
                     icon={<Undo2 size={14} aria-hidden />}
-                    onClick={() => {
-                      setDraft(null);
-                      setConnectFrom(undefined);
-                    }}
+                    onClick={() => onEditingChange(false)}
                   >
                     Descartar
                   </Button>
@@ -241,16 +252,23 @@ export function TopologyCanvas({ layout, servers, endpoints, knownServerIds, onS
             </div>
 
             {/* Zoom */}
-            <div className="absolute right-3 bottom-3 z-30 flex flex-col gap-1 rounded-xl border border-line bg-surface-2/90 p-1 backdrop-blur md:right-5 md:bottom-5">
-              <IconButton label="Acercar" onClick={() => zoomIn()}>
-                <ZoomIn size={17} />
-              </IconButton>
-              <IconButton label="Alejar" onClick={() => zoomOut()}>
-                <ZoomOut size={17} />
-              </IconButton>
-              <IconButton label="Ajustar a la pantalla" onClick={() => centerView(fitScale)}>
-                <Maximize size={16} />
-              </IconButton>
+            <div className="absolute right-4 bottom-4 z-50 flex flex-col gap-2 md:right-8 md:bottom-8">
+              {[
+                { label: 'Acercar', icon: <ZoomIn size={20} />, run: () => zoomIn() },
+                { label: 'Alejar', icon: <ZoomOut size={20} />, run: () => zoomOut() },
+                { label: 'Ajustar a la pantalla', icon: <Maximize size={20} />, run: () => centerView(fitScale) },
+              ].map((b) => (
+                <button
+                  key={b.label}
+                  type="button"
+                  aria-label={b.label}
+                  title={b.label}
+                  onClick={b.run}
+                  className="rounded-xl border border-white/10 bg-[#151619]/80 p-3 text-[#8e9299] shadow-lg backdrop-blur transition-all hover:border-white/30 hover:bg-white/10 hover:text-white"
+                >
+                  {b.icon}
+                </button>
+              ))}
             </div>
 
             <TransformComponent wrapperStyle={{ width: '100%', height: '100%' }} contentStyle={{ width: CANVAS_WIDTH, height: CANVAS_HEIGHT }}>
@@ -267,17 +285,15 @@ export function TopologyCanvas({ layout, servers, endpoints, knownServerIds, onS
                     <div
                       key={zone.id}
                       className={cn(
-                        'absolute rounded-2xl border bg-gradient-to-b to-transparent',
-                        style.border,
-                        style.wash,
-                        isEditing && connectFrom === undefined ? 'cursor-move hover:border-white/30' : 'pointer-events-none',
+                        'absolute rounded-2xl border bg-gradient-to-b from-white/5 to-transparent transition-colors',
+                        isEditing && connectFrom === undefined ? 'cursor-move border-white/30 hover:bg-white/10' : 'pointer-events-none border-white/10',
                       )}
                       style={{ left: `${zone.x}%`, top: `${zone.y}%`, width: `${zone.width}%`, height: `${zone.height}%` }}
                       onPointerDown={(e) => startDrag(e, zone.id, 'zone', zone.x, zone.y)}
                     >
-                      <div className="absolute -top-3 left-5 flex items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 shadow-lg">
+                      <div className="absolute -top-3 left-6 flex items-center gap-2 rounded-full border border-white/10 bg-[#0a0a0c] px-3 py-1 text-[9px] font-bold tracking-widest text-[#8e9299] uppercase shadow-lg">
                         <Icon size={12} className={style.text} aria-hidden />
-                        <span className="label-caps !text-[9px] !text-ink-2">{zone.title}</span>
+                        <span>{zone.title}</span>
                         {isEditing && (
                           <button
                             type="button"
@@ -309,23 +325,21 @@ export function TopologyCanvas({ layout, servers, endpoints, knownServerIds, onS
                     if (!source || !target) return null;
                     const midY = source.y + (target.y - source.y) / 2;
                     const d = `M ${source.x} ${source.y} V ${midY} H ${target.x} V ${target.y}`;
-                    const { tone, animated } = wireTone(wire.sourceId, wire.targetId);
-                    const color = TONE_COLOR[tone];
+                    const { tone } = wireTone(wire.sourceId, wire.targetId);
+                    const color = CLASSIC_COLOR[tone];
                     return (
                       <g key={wire.id}>
-                        <path d={d} fill="none" stroke={color} strokeOpacity={0.18} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-                        {animated && (
-                          <path
-                            d={d}
-                            fill="none"
-                            stroke={color}
-                            strokeOpacity={0.85}
-                            strokeWidth={2}
-                            strokeDasharray="4 12"
-                            vectorEffect="non-scaling-stroke"
-                            className="animate-flow"
-                          />
-                        )}
+                        <path d={d} fill="none" stroke={color} strokeOpacity={0.2} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+                        <path
+                          d={d}
+                          fill="none"
+                          stroke={color}
+                          strokeWidth={2}
+                          strokeDasharray="4 12"
+                          vectorEffect="non-scaling-stroke"
+                          className="animate-flow"
+                          style={{ filter: `drop-shadow(0 0 4px ${color})` }}
+                        />
                       </g>
                     );
                   })}
@@ -428,7 +442,6 @@ function SchemaNode({
   isEditing,
   isConnecting,
   isConnectSource,
-  now,
   onPointerDown,
   onClick,
   onEdit,
@@ -445,16 +458,26 @@ function SchemaNode({
 }) {
   const Icon = nodeIcon(node.icon);
   const health = server?.health;
-  const tone: Tone = health ? HEALTH_META[health].tone : 'ok';
-  const color = TONE_COLOR[tone];
+  // Sin servidor (WAN, router) o sin datos todavía: verde, como siempre.
+  const tone: Tone = health && health !== 'nodata' ? HEALTH_META[health].tone : 'ok';
+  const color = CLASSIC_COLOR[tone];
   const stats = server?.stats;
   const interactive = !isEditing ? Boolean(node.serverId) : isConnecting;
 
-  const metrics: { label: string; value: number | null; threshold: number }[] = stats
+  const rows = stats
     ? [
-        { label: 'CPU', value: stats.cpu, threshold: THRESHOLDS.cpu },
-        { label: 'RAM', value: stats.ram, threshold: THRESHOLDS.ram },
-        ...(stats.disk !== null ? [{ label: 'Disco', value: stats.disk, threshold: THRESHOLDS.disk }] : []),
+        { label: 'CPU', value: stats.cpu, text: stats.cpu === null ? '—' : `${stats.cpu.toFixed(1)}%`, alert: (stats.cpu ?? 0) > THRESHOLDS.cpu },
+        { label: 'RAM', value: stats.ram, text: stats.ram === null ? '—' : `${stats.ram.toFixed(1)}%`, alert: (stats.ram ?? 0) > THRESHOLDS.ram },
+        ...(stats.appsTotal !== null
+          ? [
+              {
+                label: 'Contenedores',
+                value: stats.appsTotal === 0 ? 0 : ((stats.appsRunning ?? 0) / stats.appsTotal) * 100,
+                text: `${stats.appsRunning ?? 0}/${stats.appsTotal}`,
+                alert: (stats.appsRunning ?? 0) < stats.appsTotal,
+              },
+            ]
+          : []),
       ]
     : [];
 
@@ -472,79 +495,68 @@ function SchemaNode({
         }
       }}
       className={cn(
-        'absolute z-10 flex -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border bg-surface/90 shadow-[0_8px_32px_rgb(0_0_0/0.45)] backdrop-blur-xl transition-[border-color,box-shadow,transform] duration-200',
-        node.isGateway || !node.serverId ? 'w-40' : 'w-44',
-        isEditing && !isConnecting && 'cursor-move border-info/40',
-        isEditing && isConnecting && 'cursor-crosshair border-info/40 hover:border-info',
-        isConnectSource && 'border-info ring-2 ring-info/40',
-        !isEditing && interactive && 'border-line hover:-translate-y-[calc(50%+2px)] hover:border-line-strong',
-        !isEditing && !interactive && 'border-line',
+        'group absolute z-10 flex -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-white/10 bg-[#0a0a0c]/80 backdrop-blur-xl transition-all duration-300',
+        node.isGateway || !node.serverId ? 'w-40' : 'w-48',
+        !isEditing && interactive && 'cursor-pointer hover:z-20 hover:scale-105 hover:border-white/30 hover:shadow-[0_0_30px_rgba(0,0,0,0.8)]',
+        isEditing && !isConnecting && 'cursor-move shadow-[0_0_20px_rgba(255,255,255,0.1)] ring-2 ring-white/30',
+        isEditing && isConnecting && 'cursor-crosshair ring-2 ring-info/40 hover:ring-info',
+        isConnectSource && 'ring-2 ring-info',
       )}
-      style={{ left: `${node.x}%`, top: `${node.y}%` }}
+      style={{ left: `${node.x}%`, top: `${node.y}%`, boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}
     >
-      <div className="h-0.5 w-full" style={{ background: `linear-gradient(90deg, transparent, ${color}, transparent)` }} />
+      {isEditing && !isConnecting && (
+        <button
+          type="button"
+          aria-label={`Editar ${node.title}`}
+          className="absolute top-2 right-2 z-50 rounded-md bg-blue-500/20 p-1.5 text-blue-400 transition-colors hover:bg-blue-500/40"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={onEdit}
+        >
+          <Edit3 size={12} />
+        </button>
+      )}
+
+      <div className="h-1 w-full opacity-80 transition-opacity group-hover:opacity-100" style={{ background: `linear-gradient(90deg, transparent, ${color}, transparent)` }} />
+
       <div className="p-3">
-        <div className="flex items-center justify-between gap-2">
+        <div className="mb-1 flex items-center justify-between">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="flex size-6 shrink-0 items-center justify-center rounded-md border border-line bg-white/[0.04]">
-              <Icon size={13} style={{ color: health ? color : 'var(--color-ink-2)' }} aria-hidden />
-            </span>
-            <span className="truncate text-[12px] font-semibold tracking-wide text-ink uppercase">{node.title}</span>
+            <div className="rounded-md border border-white/5 bg-white/5 p-1.5 transition-colors group-hover:bg-white/10">
+              <Icon size={14} style={{ color }} aria-hidden />
+            </div>
+            <span className="truncate text-[11px] font-bold tracking-wider text-white uppercase">{node.title}</span>
           </div>
-          {isEditing ? (
-            !isConnecting && (
-              <button
-                type="button"
-                aria-label={`Editar ${node.title}`}
-                className="rounded-md p-1 text-info hover:bg-info/15"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={onEdit}
-              >
-                <Edit3 size={12} />
-              </button>
-            )
-          ) : (
-            health && <StatusDot tone={tone} pulse={health === 'offline' || health === 'warning'} />
+          {!isEditing && (
+            <div className={cn('size-2 shrink-0 rounded-full', tone !== 'ok' && 'animate-pulse')} style={{ backgroundColor: color, boxShadow: `0 0 10px ${color}` }} />
           )}
         </div>
 
-        {(node.subtitle || node.ip) && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-0.5">
-            {node.subtitle && <span className="truncate font-mono text-[10px] text-ink-3">{node.subtitle}</span>}
-            {node.ip && (
-              <span className="rounded border border-line bg-white/[0.03] px-1.5 py-px font-mono text-[9px] tracking-wide text-info/90">
-                {node.ip}
-              </span>
-            )}
+        {node.subtitle && <div className={cn('truncate pr-6 pl-1 font-mono text-[10px] text-[#8e9299] uppercase', node.ip ? 'mb-1' : 'mb-3')}>{node.subtitle}</div>}
+
+        {node.ip && (
+          <div className="mb-3 pl-1">
+            <span className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 font-mono text-[9px] tracking-wider text-blue-400/80">{node.ip}</span>
           </div>
         )}
 
-        {node.serverId && (
-          <div className="mt-3 space-y-2">
-            {metrics.map((metric) => (
-              <div key={metric.label} className="space-y-1">
-                <div className="flex justify-between font-mono text-[9px] tracking-wider uppercase">
-                  <span className="text-ink-3">{metric.label}</span>
-                  <span className={cn('tabular-nums', metric.value !== null && metric.value > metric.threshold ? 'font-semibold text-warn' : 'text-ink')}>
-                    {formatPercent(metric.value)}
-                  </span>
+        {rows.length > 0 && (
+          <div className="mt-2 flex flex-col gap-2.5">
+            {rows.map((row) => (
+              <div key={row.label} className="flex flex-col gap-1">
+                <div className="flex justify-between px-1 font-mono text-[9px] uppercase">
+                  <span className="text-[#8e9299]">{row.label}</span>
+                  <span className={cn('tabular-nums', row.alert ? 'font-bold text-[#ffcc00]' : 'text-white')}>{row.text}</span>
                 </div>
-                <Meter value={stats?.online ? metric.value : null} threshold={metric.threshold} label={`${metric.label} de ${node.title}`} />
+                <div className="h-1.5 w-full overflow-hidden rounded-full border border-white/5 bg-black/60">
+                  <div
+                    className="relative h-full transition-all duration-500"
+                    style={{ width: `${Math.max(0, Math.min(100, row.value ?? 0))}%`, backgroundColor: row.alert && tone !== 'bad' ? '#ffcc00' : color }}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-r from-transparent to-white/30" />
+                  </div>
+                </div>
               </div>
             ))}
-            {stats && stats.appsTotal !== null && (
-              <div className="flex justify-between pt-0.5 font-mono text-[9px] tracking-wider uppercase">
-                <span className="text-ink-3">Contenedores</span>
-                <span className={cn('tabular-nums', health === 'warning' && server?.problems.some((p) => p.id === 'containers') ? 'font-semibold text-warn' : 'text-ink')}>
-                  {stats.appsRunning ?? '—'}/{stats.appsTotal}
-                </span>
-              </div>
-            )}
-            {(!stats || !stats.online) && (
-              <p className={cn('pt-0.5 font-mono text-[9px] tracking-wider uppercase', stats ? 'text-bad' : 'text-ink-3')}>
-                {stats ? `Último dato ${timeAgo(stats.lastUpdated, now)}` : 'Esperando datos del script'}
-              </p>
-            )}
           </div>
         )}
       </div>

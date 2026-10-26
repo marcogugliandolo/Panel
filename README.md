@@ -4,11 +4,14 @@ Panel de control de la infraestructura propia: Raspberry Pi, VPS de Contabo y Or
 
 ## Qué hace
 
-- **Esquema de red editable.** Añade, mueve y elimina nodos, zonas y conexiones desde el propio panel. Las conexiones se colorean según el estado del servidor al que llegan.
-- **Vista de servidores.** Tarjetas con CPU, RAM, disco, contenedores y tiempo encendido; es la vista por defecto en el móvil.
+- **Tres vistas de los mismos servidores**, que se eligen en la cabecera:
+  - **Clásica.** El esquema de red de siempre: tarjetas con IP, CPU, RAM y contenedores, y conexiones que se colorean según el estado del servidor al que llegan. Con **Editar Diseño** se añaden, mueven y eliminan nodos, zonas y conexiones.
+  - **Oficina.** Cada servidor es un empleado en su mesa (pixel art): teclea más rápido cuanta más CPU usa, apila papeles según la RAM, su pantalla de pared muestra CPU/RAM/disco y su corcho tiene una nota por contenedor. Si deja de enviar métricas, su silla se queda vacía. La recepción atiende las webs (un teléfono por web). Al lado, la plantilla y un registro de lo que va pasando.
+  - **Edificio.** La misma oficina en corte por plantas: los VPS en la planta 2, los equipos de casa en la planta 1, la recepción abajo y tu despacho en el ático. Pulsar una planta lleva a la oficina.
+- **Encargos.** Al arrancar, parar o reiniciar un contenedor (o comprobar una web), sales del despacho, llevas la carpeta a la mesa (en ascensor en el edificio) y el empleado lo hace; el resultado aparece en su bocadillo y en el registro. La acción es real: va por Portainer.
 - **Historial y gráficas.** Un punto por minuto y servidor, con rangos de 1 h a 30 días y vista en tabla.
 - **Contenedores vía Portainer.** Estado real de todos los contenedores, arrancar, parar, reiniciar y leer logs.
-- **Monitor de webs.** Comprueba cada URL a intervalos, mide el tiempo de respuesta, calcula el uptime y avisa si el certificado SSL va a caducar. Opcionalmente exige que la página contenga un texto.
+- **Monitor de webs.** Comprueba cada URL a intervalos, mide el tiempo de respuesta, calcula el uptime y avisa si el certificado SSL va a caducar. La primera vez que arranca sin webs vigila vaixataxi.es, panel.marcogugliandolo.com y portainer.marcogugliandolo.com.
 - **Avisos.** Servidor sin respuesta, CPU/RAM/disco altos, contenedores caídos, webs caídas y certificados a punto de caducar. Se pueden ocultar hasta el día siguiente.
 - **Acceso con sesión real.** La API entera exige iniciar sesión (cookie `HttpOnly`), con límite de intentos fallidos. Los scripts de métricas usan su propio token.
 

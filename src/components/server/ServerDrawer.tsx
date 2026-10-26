@@ -9,6 +9,68 @@ import { MetricsPanel } from './MetricsPanel';
 
 type Tab = 'metrics' | 'containers';
 
+interface DetailsProps {
+  server: ServerView;
+  portainer: PortainerStatus | null;
+  endpoints: PortainerEndpoint[] | null;
+  now: number;
+  onLinkEndpoint: (nodeId: string, endpointId: number) => Promise<void>;
+  /** Pestaña con la que se abre (la oficina abre directamente los contenedores). */
+  initialTab?: Tab;
+}
+
+/** Problemas, métricas y contenedores de un servidor. Se usa en el panel lateral de la Clásica y en la Oficina/Edificio. */
+export function ServerDetails({ server, portainer, endpoints, now, onLinkEndpoint, initialTab = 'metrics' }: DetailsProps) {
+  const [tab, setTab] = useState<Tab>(initialTab);
+  const stats = server.stats;
+  const containerCount = stats?.appsTotal ?? stats?.containers.length ?? 0;
+
+  return (
+    <div className="space-y-5">
+      {server.problems.length > 0 && (
+        <ul
+          className={`space-y-1 rounded-xl border p-3 text-[13px] ${server.health === 'offline' ? 'border-bad/25 bg-bad/[0.07] text-bad' : 'border-warn/25 bg-warn/[0.06] text-warn'}`}
+        >
+          {server.problems.map((problem) => (
+            <li key={problem.id}>
+              <span className="font-medium">{problem.title}.</span> <span className="opacity-85">{problem.detail}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <Segmented<Tab>
+        label="Sección"
+        value={tab}
+        onChange={setTab}
+        className="w-full [&>button]:flex-1 [&>button]:justify-center"
+        options={[
+          { value: 'metrics', label: <><Activity size={14} aria-hidden /> Métricas</> },
+          { value: 'containers', label: <><Boxes size={14} aria-hidden /> Contenedores{containerCount ? ` (${containerCount})` : ''}</> },
+        ]}
+      />
+
+      {!server.serverId ? null : !stats && tab === 'metrics' ? (
+        <EmptyState icon={<Activity size={24} aria-hidden />} title="Este servidor no ha enviado datos">
+          Comprueba que el script de métricas está instalado y usa <code className="font-mono text-ink-2">SERVER_ID={server.serverId}</code>.
+        </EmptyState>
+      ) : tab === 'metrics' ? (
+        <MetricsPanel serverId={server.serverId} stats={stats} now={now} />
+      ) : (
+        <ContainersPanel
+          serverId={server.serverId}
+          serverTitle={server.title}
+          reported={stats?.containers ?? []}
+          endpointId={server.node?.portainerEndpointId}
+          portainer={portainer}
+          endpoints={endpoints}
+          onLinkEndpoint={server.node ? (endpointId) => onLinkEndpoint(server.node!.id, endpointId) : undefined}
+        />
+      )}
+    </div>
+  );
+}
+
 export function ServerDrawer({
   server,
   portainer,
@@ -17,21 +79,11 @@ export function ServerDrawer({
   onClose,
   onLinkEndpoint,
   onForgotten,
-}: {
-  server: ServerView;
-  portainer: PortainerStatus | null;
-  endpoints: PortainerEndpoint[] | null;
-  now: number;
-  onClose: () => void;
-  onLinkEndpoint: (nodeId: string, endpointId: number) => Promise<void>;
-  onForgotten: () => void;
-}) {
-  const [tab, setTab] = useState<Tab>('metrics');
+}: Omit<DetailsProps, 'initialTab'> & { onClose: () => void; onForgotten: () => void }) {
   const confirm = useConfirm();
   const toast = useToast();
   const meta = HEALTH_META[server.health];
   const stats = server.stats;
-  const containerCount = stats?.appsTotal ?? stats?.containers.length ?? 0;
 
   async function forget() {
     if (!server.serverId) return;
@@ -82,47 +134,7 @@ export function ServerDrawer({
         ) : undefined
       }
     >
-      <div className="space-y-5">
-        {server.problems.length > 0 && (
-          <ul
-            className={`space-y-1 rounded-xl border p-3 text-[13px] ${server.health === 'offline' ? 'border-bad/25 bg-bad/[0.07] text-bad' : 'border-warn/25 bg-warn/[0.06] text-warn'}`}
-          >
-            {server.problems.map((problem) => (
-              <li key={problem.id}>
-                <span className="font-medium">{problem.title}.</span> <span className="opacity-85">{problem.detail}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        <Segmented<Tab>
-          label="Sección"
-          value={tab}
-          onChange={setTab}
-          className="w-full [&>button]:flex-1 [&>button]:justify-center"
-          options={[
-            { value: 'metrics', label: <><Activity size={14} aria-hidden /> Métricas</> },
-            { value: 'containers', label: <><Boxes size={14} aria-hidden /> Contenedores{containerCount ? ` (${containerCount})` : ''}</> },
-          ]}
-        />
-
-        {!server.serverId ? null : !stats && tab === 'metrics' ? (
-          <EmptyState icon={<Activity size={24} aria-hidden />} title="Este servidor no ha enviado datos">
-            Comprueba que el script de métricas está instalado y usa <code className="font-mono text-ink-2">SERVER_ID={server.serverId}</code>.
-          </EmptyState>
-        ) : tab === 'metrics' ? (
-          <MetricsPanel serverId={server.serverId} stats={stats} now={now} />
-        ) : (
-          <ContainersPanel
-            serverTitle={server.title}
-            reported={stats?.containers ?? []}
-            endpointId={server.node?.portainerEndpointId}
-            portainer={portainer}
-            endpoints={endpoints}
-            onLinkEndpoint={server.node ? (endpointId) => onLinkEndpoint(server.node!.id, endpointId) : undefined}
-          />
-        )}
-      </div>
+      <ServerDetails server={server} portainer={portainer} endpoints={endpoints} now={now} onLinkEndpoint={onLinkEndpoint} />
     </Dialog>
   );
 }

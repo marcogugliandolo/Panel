@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ContainerAction, ContainerInfo, PortainerContainer, PortainerEndpoint, PortainerStatus } from '../../../shared/types';
 import { api } from '../../api';
 import { stripAnsi } from '../../lib/format';
+import { emitOrder, newOrderId } from '../../lib/orders';
 import { usePolling } from '../../lib/hooks';
 import { containerStateMeta, isContainerProblem } from '../../lib/status';
 import { cn } from '../../lib/utils';
@@ -72,6 +73,7 @@ function Toolbar({
 }
 
 export function ContainersPanel({
+  serverId,
   serverTitle,
   reported,
   endpointId,
@@ -79,6 +81,7 @@ export function ContainersPanel({
   endpoints,
   onLinkEndpoint,
 }: {
+  serverId: string;
   serverTitle: string;
   reported: ContainerInfo[];
   endpointId: number | undefined;
@@ -88,7 +91,14 @@ export function ContainersPanel({
   onLinkEndpoint?: (endpointId: number) => Promise<void>;
 }) {
   if (endpointId && portainer?.ok) {
-    return <PortainerContainers endpointId={endpointId} serverTitle={serverTitle} endpointName={endpoints?.find((e) => e.id === endpointId)?.name} />;
+    return (
+      <PortainerContainers
+        endpointId={endpointId}
+        serverId={serverId}
+        serverTitle={serverTitle}
+        endpointName={endpoints?.find((e) => e.id === endpointId)?.name}
+      />
+    );
   }
   return (
     <div className="space-y-4">
@@ -233,7 +243,17 @@ function ReportedContainers({ containers }: { containers: ContainerInfo[] }) {
   );
 }
 
-function PortainerContainers({ endpointId, serverTitle, endpointName }: { endpointId: number; serverTitle: string; endpointName?: string }) {
+function PortainerContainers({
+  endpointId,
+  serverId,
+  serverTitle,
+  endpointName,
+}: {
+  endpointId: number;
+  serverId: string;
+  serverTitle: string;
+  endpointName?: string;
+}) {
   const containers = usePolling(() => api.containers(endpointId), 10_000, [endpointId]);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
@@ -243,10 +263,10 @@ function PortainerContainers({ endpointId, serverTitle, endpointName }: { endpoi
   const toast = useToast();
 
   async function run(container: PortainerContainer, action: ContainerAction) {
-    const verbs: Record<ContainerAction, { confirm: string; done: string }> = {
-      start: { confirm: 'Arrancar', done: 'arrancado' },
-      stop: { confirm: 'Parar', done: 'parado' },
-      restart: { confirm: 'Reiniciar', done: 'reiniciado' },
+    const verbs: Record<ContainerAction, { confirm: string; doing: string; done: string }> = {
+      start: { confirm: 'Arrancar', doing: 'Arrancando', done: 'arrancado' },
+      stop: { confirm: 'Parar', doing: 'Parando', done: 'parado' },
+      restart: { confirm: 'Reiniciar', doing: 'Reiniciando', done: 'reiniciado' },
     };
     if (action !== 'start') {
       const warning = container.isSelf
@@ -270,12 +290,18 @@ function PortainerContainers({ endpointId, serverTitle, endpointName }: { endpoi
       if (!ok) return;
     }
     setBusy(`${container.id}:${action}`);
+    // La oficina y el edificio lo escuchan: llevas el encargo a la mesa y el empleado lo hace.
+    const order = { id: newOrderId(), serverId, label: `${verbs[action].confirm} ${container.name}`, doing: `${verbs[action].doing} ${container.name}` };
+    emitOrder({ ...order, phase: 'start' });
     try {
       await api.containerAction(endpointId, container.id, action);
       toast(`${container.name} ${verbs[action].done}`);
+      emitOrder({ ...order, phase: 'done', ok: true, result: `${container.name} ${verbs[action].done}` });
       await containers.refresh();
     } catch (error) {
-      toast(error instanceof Error ? error.message : 'No se pudo completar la acción', 'bad');
+      const message = error instanceof Error ? error.message : 'No se pudo completar la acción';
+      toast(message, 'bad');
+      emitOrder({ ...order, phase: 'done', ok: false, result: message });
     } finally {
       setBusy(null);
     }
