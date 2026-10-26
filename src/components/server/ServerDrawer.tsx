@@ -2,7 +2,7 @@ import { Activity, Boxes, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import type { PortainerEndpoint, PortainerStatus } from '../../../shared/types';
 import { api } from '../../api';
-import { HEALTH_META, type ServerView } from '../../lib/status';
+import { HEALTH_META, isProxmoxHost, type ServerView } from '../../lib/status';
 import { Button, Dialog, EmptyState, Segmented, StatusBadge, useConfirm, useToast } from '../ui';
 import { ContainersPanel } from './ContainersPanel';
 import { MetricsPanel } from './MetricsPanel';
@@ -62,6 +62,7 @@ export function ServerDetails({ server, portainer, endpoints, now, onLinkEndpoin
           serverTitle={server.title}
           reported={stats?.containers ?? []}
           endpointId={server.node?.portainerEndpointId}
+          withoutPortainer={isProxmoxHost({ serverId: server.serverId, title: server.title, containers: stats?.containers })}
           portainer={portainer}
           endpoints={endpoints}
           onLinkEndpoint={server.node ? (endpointId) => onLinkEndpoint(server.node!.id, endpointId) : undefined}

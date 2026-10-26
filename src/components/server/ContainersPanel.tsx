@@ -77,6 +77,7 @@ export function ContainersPanel({
   serverTitle,
   reported,
   endpointId,
+  withoutPortainer = false,
   portainer,
   endpoints,
   onLinkEndpoint,
@@ -85,11 +86,24 @@ export function ContainersPanel({
   serverTitle: string;
   reported: ContainerInfo[];
   endpointId: number | undefined;
+  /** Servidores sin el agente de Portainer (Proxmox): no se ofrece vincularlos. */
+  withoutPortainer?: boolean;
   portainer: PortainerStatus | null;
   endpoints: PortainerEndpoint[] | null;
   /** Solo si el servidor está en el esquema (se guarda en el nodo). */
   onLinkEndpoint?: (endpointId: number) => Promise<void>;
 }) {
+  if (withoutPortainer) {
+    return (
+      <div className="space-y-4">
+        <p className="rounded-xl border border-line bg-bg/60 p-3 text-[13px] leading-relaxed text-ink-3">
+          Proxmox no tiene el agente de Portainer, así que no se vincula. Aquí ves sus contenedores LXC y máquinas virtuales tal como
+          los envía el script de métricas; para arrancarlos o pararlos, usa la web de Proxmox.
+        </p>
+        <ReportedContainers containers={reported} />
+      </div>
+    );
+  }
   if (endpointId && portainer?.ok) {
     return (
       <PortainerContainers

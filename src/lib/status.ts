@@ -64,6 +64,19 @@ export function containerStateMeta(container: Pick<ContainerInfo, 'state' | 'sta
   return { label, tone: 'idle' };
 }
 
+/** Lo que el script de métricas pone como «imagen» a los contenedores LXC y máquinas virtuales de Proxmox. */
+const PROXMOX_ITEMS = new Set(['Contenedor LXC', 'Máquina virtual']);
+
+/**
+ * Proxmox no lleva el agente de Portainer, así que no se vincula: sus contenedores LXC y máquinas virtuales
+ * llegan solo por el script. Se reconoce por el nombre o el id («proxmox», «pve») o porque solo informa de LXC y VMs.
+ */
+export function isProxmoxHost(server: { serverId?: string | null; title?: string | null; containers?: { image?: string | null }[] | null }): boolean {
+  if (/proxmox|\bpve\b/i.test(`${server.serverId ?? ''} ${server.title ?? ''}`)) return true;
+  const items = server.containers ?? [];
+  return items.length > 0 && items.every((c) => PROXMOX_ITEMS.has(c.image ?? ''));
+}
+
 export interface ServerView {
   /** Id estable para la interfaz: el del nodo o, si no está en el esquema, el del servidor. */
   key: string;
