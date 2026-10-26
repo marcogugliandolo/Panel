@@ -1,10 +1,11 @@
-import { ChevronLeft, Phone, Trash2 } from 'lucide-react';
+import { ChevronLeft, PanelRightClose, PanelRightOpen, Phone, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { THRESHOLDS, type Monitor, type PortainerEndpoint, type PortainerStatus } from '../../../shared/types';
 import { api } from '../../api';
 import { formatMs, formatPercent, timeAgo } from '../../lib/format';
+import { useStoredState } from '../../lib/hooks';
 import { emitOrder, newOrderId, onOrder } from '../../lib/orders';
-import { containerStateMeta, HEALTH_META, isContainerProblem, MONITOR_META, type ServerView, type Tone } from '../../lib/status';
+import { containerStateMeta, HEALTH_META, isContainerProblem, MONITOR_META, TONE_COLOR, type ServerView, type Tone } from '../../lib/status';
 import { cn } from '../../lib/utils';
 import { ServerDetails } from '../server/ServerDrawer';
 import { Button, StatusBadge, useConfirm, useToast } from '../ui';
@@ -131,6 +132,8 @@ export function OfficeView({
   const [, setTick] = useState(0);
   const logId = useRef(0);
   const pendingFocus = useRef<FloorKey | null>(null);
+  // Plantilla comprimida: se queda en una tira de retratos y la escena gana ancho. Al abrir una ficha se despliega.
+  const [rosterCollapsed, setRosterCollapsed] = useStoredState('panel:plantilla-comprimida', false);
 
   const addLog = useCallback((who: string, text: string, tone: LogEntry['tone']) => {
     setLog((entries) => [{ id: ++logId.current, t: Date.now(), who, text, tone }, ...entries].slice(0, 80));
@@ -230,10 +233,13 @@ export function OfficeView({
 
   const selected = selectedKey && selectedKey !== RECEPTION_KEY ? servers.find((s) => s.key === selectedKey) ?? null : null;
   const text = TEXT[mode];
+  const compact = rosterCollapsed && !selectedKey;
+  const roster = servers.filter(inSchema).sort(byFloorAndName);
+  const websDown = (monitors ?? []).filter((m) => m.status === 'down').length;
 
   return (
     <div className="scrollbar-thin relative h-full overflow-y-auto">
-      <div className="of-main">
+      <div className={cn('of-main', compact && 'of-compact')}>
         <section className="of-stage" aria-labelledby="of-title">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-line px-4 py-2.5">
             <h2 id="of-title" className="text-sm font-semibold">{text.title}</h2>
@@ -260,7 +266,37 @@ export function OfficeView({
         </section>
 
         <aside ref={sideRef} className="of-side" aria-label="Plantilla y ficha">
-          {selectedKey === RECEPTION_KEY ? (
+          {compact ? (
+            <div className="of-rail">
+              <button
+                type="button"
+                onClick={() => setRosterCollapsed(false)}
+                aria-label="Desplegar la plantilla"
+                title="Desplegar la plantilla"
+                className="grid size-9 place-items-center rounded-lg border border-line text-ink-2 transition-colors hover:border-line-strong hover:text-ink"
+              >
+                <PanelRightOpen size={16} aria-hidden />
+              </button>
+              {[...roster.map((s) => ({ key: s.key, id: s.serverId!, title: s.title, mood: moodOf(s) })),
+                { key: RECEPTION_KEY, id: RECEPTION_KEY, title: 'Recepción', mood: { label: websDown ? 'Teléfono sonando' : 'Atendiendo', tone: (websDown ? 'bad' : 'ok') as Tone } }].map((p) => (
+                <button
+                  key={p.key}
+                  type="button"
+                  onClick={() => onSelect(p.key)}
+                  aria-label={`${p.title}: ${p.mood.label}. Ver su ficha`}
+                  title={`${p.title} · ${p.mood.label}`}
+                  className="relative rounded-[10px] border border-line bg-surface-2 p-1 transition-colors hover:border-line-strong hover:bg-surface-3"
+                >
+                  <Portrait id={p.id} />
+                  <span
+                    aria-hidden
+                    className="absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-surface"
+                    style={{ background: TONE_COLOR[p.mood.tone] }}
+                  />
+                </button>
+              ))}
+            </div>
+          ) : selectedKey === RECEPTION_KEY ? (
             <ReceptionPanel monitors={monitors} onBack={() => onSelect(null)} onChange={onMonitorsChange} now={now} />
           ) : selected ? (
             <div key={selected.key} className="space-y-4">
@@ -307,14 +343,22 @@ export function OfficeView({
           ) : (
             <div className="space-y-4">
               <div>
-                <h2 className="text-[15px] font-semibold">La plantilla</h2>
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-[15px] font-semibold">La plantilla</h2>
+                  <button
+                    type="button"
+                    onClick={() => setRosterCollapsed(true)}
+                    aria-label="Comprimir la plantilla"
+                    title="Comprimir la plantilla"
+                    className="grid size-8 place-items-center rounded-lg border border-line text-ink-2 transition-colors hover:border-line-strong hover:text-ink"
+                  >
+                    <PanelRightClose size={15} aria-hidden />
+                  </button>
+                </div>
                 <p className="mt-1 text-[13px] text-ink-2">Cada servidor es un empleado de marcogugliandolo.com. Elige uno para ver su ficha y sus contenedores.</p>
               </div>
               <ul className="space-y-1.5">
-                {servers
-                  .filter(inSchema)
-                  .sort(byFloorAndName)
-                  .map((s) => {
+                {roster.map((s) => {
                     const mood = moodOf(s);
                     const st = s.stats;
                     return (
