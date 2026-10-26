@@ -47,9 +47,14 @@ interface Props {
   now: number;
 }
 
+/** En la oficina trabajan los mismos servidores que hay en el esquema de la vista Clásica. */
+const inSchema = (s: ServerView) => Boolean(s.node && s.serverId);
+/** Ids que enviaron métricas pero no están en el esquema (normalmente ids antiguos). */
+const outsideSchema = (s: ServerView) => Boolean(!s.node && s.serverId);
+
 function sceneServers(servers: ServerView[]): SceneServer[] {
   return servers
-    .filter((s) => s.serverId)
+    .filter(inSchema)
     .sort((a, b) => (a.node?.y ?? 999) - (b.node?.y ?? 999) || (a.node?.x ?? 999) - (b.node?.x ?? 999))
     .map((s) => ({
       key: s.key,
@@ -299,7 +304,7 @@ export function OfficeView({
               </div>
               <ul className="space-y-1.5">
                 {servers
-                  .filter((s) => s.serverId)
+                  .filter(inSchema)
                   .map((s) => {
                     const mood = moodOf(s);
                     const st = s.stats;
@@ -350,6 +355,33 @@ export function OfficeView({
                   </button>
                 </li>
               </ul>
+              {servers.some(outsideSchema) && (
+                <div className="space-y-2 border-t border-line pt-4">
+                  <h3 className="label-caps">Fuera del esquema</h3>
+                  <p className="text-xs text-ink-3">
+                    Enviaron métricas con un id que no está en el esquema, así que no tienen mesa. Si es un id antiguo, ábrelo y pulsa «Olvidar».
+                  </p>
+                  <ul className="space-y-1">
+                    {servers.filter(outsideSchema).map((s) => (
+                      <li key={s.key}>
+                        <button
+                          type="button"
+                          onClick={() => onSelect(s.key)}
+                          className="flex w-full items-center justify-between gap-3 rounded-[8px] border border-line px-2.5 py-1.5 text-left text-[12.5px] transition-colors hover:border-line-strong hover:bg-surface-2"
+                        >
+                          <span className="min-w-0 truncate">
+                            <span className="font-mono text-ink">{s.serverId}</span>
+                            {s.title !== s.serverId && <span className="text-ink-3"> · {s.title}</span>}
+                          </span>
+                          <span className="shrink-0 text-[11.5px] text-ink-3">
+                            {s.stats?.online ? 'Enviando ahora' : s.stats ? `Última vez ${timeAgo(s.stats.lastUpdated, now)}` : 'Sin datos'}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           )}
         </aside>
