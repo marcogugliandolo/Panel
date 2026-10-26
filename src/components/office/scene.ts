@@ -210,12 +210,53 @@ export function paintPortrait(cv, L) {
 function plant(g, x, y) {
   spr(g, [[x - 6, y - 15, 5, 6, C.leaf], [x + 1, y - 16, 5, 7, C.leaf], [x - 3, y - 20, 6, 7, C.leaf2], [x - 4, y - 6, 8, 6, C.pot], [x - 5, y - 8, 10, 2, C.potHi]]);
 }
-function nightWindow(g, wx, wy, w, h, seed) {
-  spr(g, [[wx, wy, w, h, '#0d1424']]);
+/* ---------- Día y noche ---------- */
+/** Dónde se calcula la salida y la puesta del sol: Madrid (el panel se usa desde España). */
+const SUN_AT = { lat: 40.42, lon: -3.7 };
+/** Salida y puesta del sol (ms UTC) del día de `t`; algoritmo de SunCalc. */
+function sunTimes(t, lat = SUN_AT.lat, lon = SUN_AT.lon) {
+  const rad = Math.PI / 180, dayMs = 86400000, J1970 = 2440588, J2000 = 2451545, J0 = 0.0009, e = rad * 23.4397;
+  const d = t / dayMs - 0.5 + J1970 - J2000, lw = rad * -lon, phi = rad * lat;
+  const n = Math.round(d - J0 - lw / (2 * Math.PI));
+  const transit = (ht) => J0 + (ht + lw) / (2 * Math.PI) + n;
+  const ds = transit(0), M = rad * (357.5291 + 0.98560028 * ds);
+  const L = M + rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M)) + rad * 102.9372 + Math.PI;
+  const dec = Math.asin(Math.sin(e) * Math.sin(L));
+  const jDate = (j) => (j + 0.5 - J1970) * dayMs;
+  const noon = J2000 + ds + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * L);
+  const w = Math.acos((Math.sin(rad * -0.833) - Math.sin(phi) * Math.sin(dec)) / (Math.cos(phi) * Math.cos(dec)));
+  const a = transit(w), set = J2000 + a + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * L);
+  return { rise: jDate(noon - (set - noon)), set: jDate(set) };
+}
+/** Momento del día: amanecer y atardecer duran 40 minutos a cada lado de la salida y la puesta del sol. */
+export function skyPhase(t = Date.now()) {
+  const { rise, set } = sunTimes(t), m = 40 * 60000;
+  if (Math.abs(t - rise) <= m) return 'dawn';
+  if (Math.abs(t - set) <= m) return 'dusk';
+  return t > rise && t < set ? 'day' : 'night';
+}
+const SKIES = {
+  night: { top: '#04060b', bottom: '#10162a', pane: '#0d1424', paneLo: '#111a2e', bar: '#1a1f2c', city: '#0a0d16', cityTop: '#151b2b', lit: 0.26, off: '#111624' },
+  dawn: { top: '#1c2350', bottom: '#e0906a', pane: '#36457e', paneLo: '#d98b68', bar: '#2a2f45', city: '#20243a', cityTop: '#2e3350', lit: 0.12, off: '#292d45' },
+  day: { top: '#3d82c6', bottom: '#a8d3f1', pane: '#5f9fd6', paneLo: '#a8d3f1', bar: '#39404e', city: '#4d5b72', cityTop: '#5f6e88', lit: 0, off: '#6c88a8' },
+  dusk: { top: '#28214e', bottom: '#ef8857', pane: '#463c78', paneLo: '#e6865c', bar: '#2a2f45', city: '#20243a', cityTop: '#2e3350', lit: 0.18, off: '#292d45' },
+};
+function cloud(g, x, y, s = 1) {
+  const c = '#eef6fc', sh = '#cfe2f1';
+  rect(g, x, y + 3 * s, 22 * s, 4 * s, sh); rect(g, x + 2 * s, y + 1 * s, 10 * s, 5 * s, c); rect(g, x + 9 * s, y - 1 * s, 9 * s, 6 * s, c); rect(g, x + 1 * s, y + 3 * s, 20 * s, 3 * s, c);
+}
+/** Ventana al exterior: noche estrellada, cielo de día con nubes o el naranja del amanecer y el atardecer. */
+function skyWindow(g, wx, wy, w, h, seed, sky) {
+  const P = SKIES[sky];
+  spr(g, [[wx, wy, w, h, P.pane]]);
+  const gr = g.createLinearGradient(0, wy, 0, wy + h);
+  gr.addColorStop(0, P.pane); gr.addColorStop(1, P.paneLo);
+  g.fillStyle = gr; g.fillRect(wx, wy, w, h);
   const r = makePrng(seed);
-  for (let i = 0; i < w / 5; i++) rect(g, wx + Math.floor(r() * w), wy + Math.floor(r() * (h - 2)), 1, 1, '#c9d6ff');
-  for (let x = wx + 15; x < wx + w - 2; x += 16) rect(g, x, wy, 2, h, '#1a1f2c');
-  rect(g, wx, wy + Math.floor(h / 2) - 1, w, 2, '#1a1f2c');
+  if (sky === 'night') for (let i = 0; i < w / 5; i++) rect(g, wx + Math.floor(r() * w), wy + Math.floor(r() * (h - 2)), 1, 1, '#c9d6ff');
+  if (sky === 'day') { const cx = wx + 2 + Math.floor(r() * Math.max(1, w - 18)); rect(g, cx, wy + 4, 12, 3, '#e6f2fb'); rect(g, cx + 3, wy + 2, 6, 2, '#e6f2fb'); }
+  for (let x = wx + 15; x < wx + w - 2; x += 16) rect(g, x, wy, 2, h, P.bar);
+  rect(g, wx, wy + Math.floor(h / 2) - 1, w, 2, P.bar);
 }
 function bookshelf(g, x, y, seed) {
   spr(g, [[x, y, 28, 28, '#3d2b1f']]);
@@ -317,7 +358,7 @@ function pointAt(P, d) {
   return P.pts[P.pts.length - 1];
 }
 
-function drawOfficeBG(paths) {
+function drawOfficeBG(paths, sky) {
   const c = document.createElement('canvas'); c.width = W; c.height = H;
   const g = c.getContext('2d');
   rect(g, 0, 0, W, H, C.void);
@@ -354,7 +395,7 @@ function drawOfficeBG(paths) {
   rect(g, 305, 9, 2, 20, '#1d3555'); rect(g, 322, 9, 2, 20, '#1d3555');
   rect(g, 316, 18, 2, 4, '#5a6170'); rect(g, 322, 18, 2, 4, '#5a6170');
   rect(g, 304, 33, 32, 6, '#24272f');
-  nightWindow(g, 112, 8, 32, 18, 3); nightWindow(g, 262, 8, 32, 18, 9);
+  skyWindow(g, 112, 8, 32, 18, 3, sky); skyWindow(g, 262, 8, 32, 18, 9, sky);
   drawLogo(g, 346, 9);
   spr(g, [[178, 181, 24, 8, '#151821']]);
   rect(g, 182, 183, 3, 2, C.info); rect(g, 189, 183, 3, 2, C.info); rect(g, 196, 183, 3, 2, C.info); rect(g, 183, 185, 14, 1, '#2d4a72');
@@ -377,22 +418,32 @@ function drawOfficeBG(paths) {
 }
 
 const BX0 = 112, BX1 = 520, RX0 = 120, RX1 = 476;
-function drawBuildingBG(paths) {
+function drawBuildingBG(paths, sky) {
   const c = document.createElement('canvas'); c.width = W; c.height = H;
-  const g = c.getContext('2d'), r = makePrng(5);
-  const sky = g.createLinearGradient(0, 0, 0, 326);
-  sky.addColorStop(0, '#04060b'); sky.addColorStop(1, '#10162a');
-  g.fillStyle = sky; g.fillRect(0, 0, W, 326);
-  for (let i = 0; i < 80; i++) rect(g, Math.floor(r() * W), Math.floor(r() * 210), 1, 1, r() < 0.2 ? '#ffffff' : '#7d86a6');
-  for (let dy = -8; dy <= 8; dy++) { const w = Math.round(Math.sqrt(64 - dy * dy)); rect(g, 590 - w, 32 + dy, w * 2, 1, '#e8e6d8'); }
-  rect(g, 586, 28, 3, 2, '#cfcdbf'); rect(g, 592, 35, 2, 2, '#cfcdbf');
+  const g = c.getContext('2d'), r = makePrng(5), P = SKIES[sky];
+  const grad = g.createLinearGradient(0, 0, 0, 326);
+  grad.addColorStop(0, P.top); grad.addColorStop(1, P.bottom);
+  g.fillStyle = grad; g.fillRect(0, 0, W, 326);
+  const disc = (cx, cy, rr, col) => { for (let dy = -rr; dy <= rr; dy++) { const w = Math.round(Math.sqrt(rr * rr - dy * dy)); rect(g, cx - w, cy + dy, w * 2, 1, col); } };
+  if (sky === 'night') {
+    for (let i = 0; i < 80; i++) rect(g, Math.floor(r() * W), Math.floor(r() * 210), 1, 1, r() < 0.2 ? '#ffffff' : '#7d86a6');
+    disc(590, 32, 8, '#e8e6d8');
+    rect(g, 586, 28, 3, 2, '#cfcdbf'); rect(g, 592, 35, 2, 2, '#cfcdbf');
+  } else if (sky === 'day') {
+    disc(590, 36, 10, '#ffe7a0'); disc(590, 36, 7, '#fff3c8');
+    cloud(g, 14, 64, 2); cloud(g, 548, 92); cloud(g, 150, 10); cloud(g, 380, 6, 1); cloud(g, 40, 128);
+  } else {
+    // Sol bajo: sale por la derecha y se pone por la izquierda, medio tapado por los edificios.
+    disc(sky === 'dawn' ? 576 : 62, 150, 12, '#ffb36b'); disc(sky === 'dawn' ? 576 : 62, 150, 8, '#ffd29a');
+    for (let i = 0; i < 12; i++) rect(g, Math.floor(r() * W), Math.floor(r() * 60), 1, 1, '#c9c2e8');
+  }
   for (const [x, w, top] of [[0, 26, 196], [24, 30, 150], [52, 24, 214], [74, 34, 172], [528, 28, 182], [554, 36, 138], [588, 24, 206], [610, 30, 166]]) {
-    rect(g, x, top, w, 326 - top, '#0a0d16'); rect(g, x, top, w, 1, '#151b2b');
-    for (let yy = top + 6; yy < 318; yy += 7) for (let xx = x + 3; xx < x + w - 3; xx += 5) rect(g, xx, yy, 2, 3, r() < 0.26 ? (r() < 0.5 ? '#c9a85a' : '#6a5a30') : '#111624');
+    rect(g, x, top, w, 326 - top, P.city); rect(g, x, top, w, 1, P.cityTop);
+    for (let yy = top + 6; yy < 318; yy += 7) for (let xx = x + 3; xx < x + w - 3; xx += 5) rect(g, xx, yy, 2, 3, r() < P.lit ? (r() < 0.5 ? '#c9a85a' : '#6a5a30') : P.off);
   }
   rect(g, 0, 326, W, 8, '#20222a'); rect(g, 0, 326, W, 1, '#2e313b'); rect(g, 0, 334, W, 18, '#0f1014');
   for (let x = 0; x < W; x += 24) rect(g, x + 4, 343, 12, 1, '#3a3d45');
-  rect(g, 63, 268, 2, 58, '#3a3e4a'); rect(g, 58, 266, 10, 3, '#4a4f5c'); rect(g, 60, 269, 6, 1, '#ffd27a');
+  rect(g, 63, 268, 2, 58, '#3a3e4a'); rect(g, 58, 266, 10, 3, '#4a4f5c'); rect(g, 60, 269, 6, 1, sky === 'day' ? '#8a8f99' : '#ffd27a');
   rect(g, 108, 40, 416, 6, C.cap); rect(g, 108, 36, 4, 4, C.cap); rect(g, 520, 36, 4, 4, C.cap);
   spr(g, [[478, 22, 38, 18, '#2c2f39']]); rect(g, 483, 27, 10, 6, '#1b1d23'); rect(g, 498, 27, 12, 2, '#1b1d23'); rect(g, 498, 31, 12, 2, '#1b1d23');
   rect(g, 495, 2, 2, 20, '#5a6170'); rect(g, 491, 8, 10, 1, '#5a6170'); rect(g, 492, 14, 8, 1, '#5a6170');
@@ -432,18 +483,18 @@ function drawBuildingBG(paths) {
   rect(g, 476, 46, 4, 274, '#14161c');
   drawCables(g, paths);
   let y0 = FLOORS[FI.atico].y0;
-  nightWindow(g, 154, y0 + 6, 80, 24, 21); nightWindow(g, 314, y0 + 6, 128, 24, 22);
+  skyWindow(g, 154, y0 + 6, 80, 24, 21, sky); skyWindow(g, 314, y0 + 6, 128, 24, 22, sky);
   bookshelf(g, 124, y0 + 34, 13);
   spr(g, [[372, y0 + 46, 60, 9, '#3b3550'], [372, y0 + 55, 60, 9, '#4a4363'], [369, y0 + 48, 4, 16, '#352f48'], [431, y0 + 48, 4, 16, '#352f48']]);
   spr(g, [[226, y0 + 61, 90, 3, '#33263d']]);
   plant(g, 462, y0 + 64);
   y0 = FLOORS[FI.nube].y0;
-  nightWindow(g, 232, y0 + 6, 32, 18, 31); nightWindow(g, 338, y0 + 6, 32, 18, 32);
+  skyWindow(g, 232, y0 + 6, 32, 18, 31, sky); skyWindow(g, 338, y0 + 6, 32, 18, 32, sky);
   spr(g, [[386, y0 + 40, 8, 6, C.chair], [420, y0 + 40, 8, 6, C.chair]]);
   spr(g, [[378, y0 + 46, 58, 10, '#5c4030'], [378, y0 + 56, 58, 8, '#3f2b1f']]); rect(g, 378, y0 + 46, 58, 1, '#71503c');
   plant(g, 134, y0 + 64); plant(g, 462, y0 + 64);
   y0 = FLOORS[FI.casa].y0;
-  nightWindow(g, 206, y0 + 6, 32, 18, 41); nightWindow(g, 296, y0 + 6, 32, 18, 42);
+  skyWindow(g, 206, y0 + 6, 32, 18, 41, sky); skyWindow(g, 296, y0 + 6, 32, 18, 42, sky);
   plant(g, 134, y0 + 64);
   // Bajada del cable del techo al router y extintor.
   rect(g, CPD_B.devX - 1, y0 + 3, 3, 11, C.cable); rect(g, CPD_B.devX - 1, y0 + 3, 1, 11, C.cableHi);
@@ -514,6 +565,7 @@ export function createScene(o: SceneOptions) {
   const packets = [];
   const routerFlash = {};
   let bgOffice = null, bgBuilding = null, blocked = null;
+  let sky = skyPhase(), skyCheckedAt = Date.now();
   const results = new Map();       // resultados de encargos que llegan antes que tú
 
   const RECEP = {
@@ -627,13 +679,17 @@ export function createScene(o: SceneOptions) {
     const { b, block } = baseBlocked();
     for (const a of actors) block(Math.floor((a.cx - 24) / T), 3, Math.floor((a.cx + 23) / T), 5);
     blocked = b;
-    bgOffice = drawOfficeBG(actors.map((a) => a.paths.oficina));
-    bgBuilding = drawBuildingBG(actors.map((a) => a.paths.edificio));
+    paintBackgrounds();
     for (const a of byKey.values()) attachOverlay(a);
     packets.length = 0;
     refreshPlates();
   }
   relayout();
+
+  function paintBackgrounds() {
+    bgOffice = drawOfficeBG(actors.map((a) => a.paths.oficina), sky);
+    bgBuilding = drawBuildingBG(actors.map((a) => a.paths.edificio), sky);
+  }
 
   /* --- Datos que llegan del panel --- */
   function setData(servers: SceneServer[], webs: SceneWeb[], netDevices: SceneNetDevice[] = []) {
@@ -855,7 +911,9 @@ export function createScene(o: SceneOptions) {
     for (const a of actors) if (!a.online) rect(ctx, a.cx - 30, 32, 60, 66, 'rgba(0,0,0,.42)');
     ctx.globalCompositeOperation = 'lighter';
     glow(ctx, 320, 40, 70, '90,156,240', 0.14);
-    glow(ctx, 128, 22, 44, '90,120,220', 0.06); glow(ctx, 278, 22, 40, '90,120,220', 0.06);
+    const winLight = sky === 'day' ? ['205,232,255', 0.16, 70] : sky === 'night' ? ['90,120,220', 0.06, 44] : ['255,170,120', 0.1, 56];
+    glow(ctx, 128, 22, winLight[2], winLight[0], winLight[1]); glow(ctx, 278, 22, winLight[2], winLight[0], winLight[1]);
+    if (sky === 'day') glow(ctx, 320, 176, 360, '255,248,230', 0.05);
     glow(ctx, 320, 220, 150, '140,150,190', 0.035);
     for (const a of actors) workerLights(a, a.cx, DESK_Y, 16);
     glow(ctx, 320, 150, 52, '255,196,120', 0.12);
@@ -909,8 +967,10 @@ export function createScene(o: SceneOptions) {
     for (const p of packets) { const [x, y] = packetPos(p); rect(ctx, Math.round(x) - 1, Math.round(y) - 1, 2, 2, p.dir > 0 ? C.info : '#9fd0ff'); }
     for (const a of actors) if (!a.online) { const p = bPos(a); rect(ctx, p.cx - 30, p.y0, 60, 64, 'rgba(0,0,0,.45)'); }
     ctx.globalCompositeOperation = 'lighter';
-    glow(ctx, 64, 274, 52, '255,196,120', 0.2);
-    glow(ctx, 590, 32, 30, '200,210,255', 0.08);
+    if (sky !== 'day') glow(ctx, 64, 274, 52, '255,196,120', 0.2);
+    if (sky === 'night') glow(ctx, 590, 32, 30, '200,210,255', 0.08);
+    else if (sky === 'day') glow(ctx, 590, 36, 46, '255,236,170', 0.3);
+    else glow(ctx, sky === 'dawn' ? 576 : 62, 150, 70, '255,160,90', 0.22);
     for (let x = 250; x <= 390; x += 35) glow(ctx, x, 26, 28, '0,255,157', 0.09);
     if (blinkOn) glow(ctx, 496, 2, 12, '255,77,77', 0.55);
     for (const f of FLOORS) {
@@ -1103,6 +1163,11 @@ export function createScene(o: SceneOptions) {
     if (destroyed) return;
     const dt = Math.min(0.05, (t - last) / 1000); last = t;
     const now = Date.now();
+    if (now - skyCheckedAt > 30000) {
+      skyCheckedAt = now;
+      const next = skyPhase(now);
+      if (next !== sky) { sky = next; paintBackgrounds(); }
+    }
     update(dt, now);
     if (canvas.offsetParent !== null) render(now);
     plateTimer += dt; if (plateTimer > 1) { plateTimer = 0; refreshPlates(); }
