@@ -6,7 +6,7 @@ import { useNow, usePolling, useStoredState } from '../lib/hooks';
 import { buildAlerts, buildServerViews, type PanelAlert } from '../lib/status';
 import { Header, type View } from './Header';
 import { OfficeView } from './office/OfficeView';
-import { RECEPTION_KEY } from './office/scene';
+import { RECEPTION_KEY, type SceneNetDevice } from './office/scene';
 import { ServerDrawer } from './server/ServerDrawer';
 import { TopologyCanvas } from './topology/TopologyCanvas';
 import { Spinner, useToast } from './ui';
@@ -36,6 +36,20 @@ export function Dashboard({ session, onLogout }: { session: Session; onLogout: (
   const servers = useMemo(() => buildServerViews(layout?.nodes ?? [], statsQuery.data ?? []), [layout, statsQuery.data]);
   const serversByKey = useMemo(() => new Map(servers.map((s) => [s.key, s])), [servers]);
   const knownServerIds = useMemo(() => (statsQuery.data ?? []).map((s) => s.serverId), [statsQuery.data]);
+  // Lo que va al CPD de la oficina: nodos del esquema que no son servidores ni Internet (router, firewall…). Routers primero.
+  const network = useMemo<SceneNetDevice[]>(
+    () =>
+      (layout?.nodes ?? [])
+        .filter((n) => !n.serverId && n.icon !== 'Globe' && n.icon !== 'Cloud')
+        .map((n) => ({
+          key: n.id,
+          title: n.title,
+          detail: n.ip || n.subtitle || null,
+          kind: n.icon === 'Router' ? ('router' as const) : n.icon === 'Shield' ? ('firewall' as const) : ('box' as const),
+        }))
+        .sort((a, b) => Number(b.kind === 'router') - Number(a.kind === 'router')),
+    [layout],
+  );
 
   const today = localDay();
   const allAlerts = useMemo(() => buildAlerts(servers, monitorsQuery.data ?? []), [servers, monitorsQuery.data]);
@@ -143,6 +157,7 @@ export function Dashboard({ session, onLogout }: { session: Session; onLogout: (
           <OfficeView
             mode={view === 'edificio' ? 'edificio' : 'oficina'}
             servers={servers}
+            network={network}
             monitors={monitorsQuery.data}
             selectedKey={view === 'clasica' ? null : selectedKey}
             onSelect={setSelectedKey}

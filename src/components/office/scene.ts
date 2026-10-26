@@ -5,7 +5,8 @@
  * Cada servidor del esquema es un empleado en su mesa: teclea más rápido cuanta más CPU usa,
  * apila papeles según la RAM, su pantalla de pared muestra CPU/RAM/disco y su corcho tiene una
  * nota por contenedor. Si deja de enviar métricas, su silla se queda vacía. La recepción vigila
- * las webs (un teléfono por web) y tú, desde el despacho, llevas los encargos a cada mesa.
+ * las webs (un teléfono por web) y tú, desde el despacho, llevas los encargos a cada mesa. En el CPD
+ * están el router y el resto del equipo de red del esquema, y un rack con una luz por equipo de casa.
  *
  * Todo se dibuja en píxeles nativos (640×352) y se escala; nombres y bocadillos van en HTML encima.
  */
@@ -36,6 +37,16 @@ export interface SceneWeb {
   latencyMs: number | null;
 }
 
+/** Nodo del esquema que no es un servidor (router, firewall…): va al CPD. */
+export interface SceneNetDevice {
+  key: string;
+  title: string;
+  /** IP u otro dato corto que se enseña junto al nombre. */
+  detail: string | null;
+  kind: 'router' | 'firewall' | 'box';
+}
+const DEFAULT_ROUTER: SceneNetDevice = { key: 'router', title: 'Router', detail: null, kind: 'router' };
+
 export interface SceneOptions {
   canvas: HTMLCanvasElement;
   world: HTMLElement;
@@ -65,6 +76,8 @@ const C = {
   monitor: '#1c1e25', monitorHi: '#30333d', keyboard: '#3a3d47', keyboardHi: '#4d515d',
   lampHead: '#d6cfb2', lampOff: '#4a4c52', lampArm: '#555a66',
   counterTop: '#4b505e', counterFront: '#30343f', shoes: '#121318', slab: '#2f323c', slabHi: '#40444f',
+  cpd: '#1f232b', cpdLine: '#171a20', cpdHi: '#262b34', cpdVent: '#12151a',
+  rack: '#121419', rackTop: '#3a3e4a', rackFrame: '#2a2d36', rackUnit: '#1d2027',
 };
 
 /* ---------- Utilidades ---------- */
@@ -244,7 +257,7 @@ function brackets(g, x, y, w, h, col) {
 export const FLOORS = [
   { key: 'atico', label: 'Ático', name: 'Despacho', y0: 46, room: [16, 176, 224, 160] },
   { key: 'nube', label: 'Planta 2', name: 'Nube', y0: 116, room: [16, 32, 224, 144] },
-  { key: 'casa', label: 'Planta 1', name: 'Casa', y0: 186, room: [400, 32, 224, 288] },
+  { key: 'casa', label: 'Planta 1', name: 'Casa y CPD', y0: 186, room: [400, 32, 224, 304] },
   { key: 'baja', label: 'Planta baja', name: 'Recepción', y0: 256, room: [256, 32, 128, 304] },
 ];
 const FI = Object.fromEntries(FLOORS.map((f, i) => [f.key, i]));
@@ -256,17 +269,26 @@ const SLOTS = {
 
 const tiles = Array.from({ length: MH }, () => new Array(MW).fill('wall'));
 function area(x0, y0, x1, y1, t) { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) tiles[y][x] = t; }
-area(1, 2, 14, 10, 'nube'); area(1, 12, 14, 20, 'office'); area(16, 2, 23, 20, 'hall'); area(25, 2, 38, 20, 'casa');
-for (const [x, y] of [[15, 5], [15, 6], [15, 15], [15, 16], [24, 12], [24, 13]]) tiles[y][x] = 'door';
+// Casa arriba a la derecha y, debajo, el CPD con el router y los racks.
+area(1, 2, 14, 10, 'nube'); area(1, 12, 14, 20, 'office'); area(16, 2, 23, 20, 'hall'); area(25, 2, 38, 11, 'casa'); area(25, 13, 38, 20, 'cpd');
+for (const [x, y] of [[15, 5], [15, 6], [15, 15], [15, 16], [24, 9], [24, 10], [24, 16], [24, 17]]) tiles[y][x] = 'door';
 function baseBlocked() {
   const b = tiles.map((r) => r.map((t) => t === 'wall'));
   const block = (x0, y0, x1, y1) => { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) b[y][x] = true; };
-  block(18, 8, 21, 10); block(30, 12, 32, 13); block(5, 15, 9, 16); block(5, 7, 8, 9);
+  block(18, 8, 21, 10); block(5, 15, 9, 16); block(5, 7, 8, 9);
   block(1, 12, 2, 12); block(13, 12, 13, 12); block(13, 20, 13, 20); block(1, 3, 1, 3); block(14, 3, 14, 3);
   block(16, 2, 16, 2); block(23, 2, 23, 2); block(16, 20, 17, 20); block(23, 19, 23, 20);
-  block(25, 3, 25, 3); block(38, 20, 38, 20); block(33, 19, 36, 20);
+  block(25, 3, 25, 3); block(38, 11, 38, 11); block(33, 10, 36, 11);
+  block(25, 13, 38, 20); // en el CPD no hay que entrar para hacer encargos
   return { b, block };
 }
+
+/* ---------- CPD: el router (y el resto del equipo de red del esquema) y los racks ---------- */
+/** Dónde va cada aparato de red en el plano: el primero recibe los cables de casa. */
+const NET_X = [456, 528, 592];
+const ROUTER_PT = [456, 272];
+const RACK_X = [444, 472, 500];
+const CPD_B = { x: 400, rackX: 404, devX: 452 }; // en el corte del edificio, a la derecha de la planta 1
 
 function mkPath(pts, routerPt) {
   let len = 0, dR = -1; const segs = [];
@@ -279,12 +301,13 @@ function mkPath(pts, routerPt) {
 }
 function officePath(floor, cx) {
   if (floor === 'nube') return mkPath([[320, 34], [320, 104], [cx, 104], [cx, 90]]);
-  return mkPath([[320, 34], [320, 56], [368, 56], [368, 200], [504, 200], [504, 128], [cx, 128], [cx, 90]], [504, 200]);
+  // Baja por el pasillo, entra al CPD, pasa por el router y sube por la pared hasta cada mesa.
+  return mkPath([[320, 34], [320, 56], [368, 56], [368, ROUTER_PT[1]], ROUTER_PT, [ROUTER_PT[0], 128], [cx, 128], [cx, 90]], ROUTER_PT);
 }
 function buildingPath(floor, bx) {
   const roof = [[496, 4], [496, 30], [477, 30]];
   if (floor === 'nube') return mkPath([...roof, [477, 118], [bx, 118]]);
-  return mkPath([...roof, [477, 188], [422, 188], [bx, 188]], [422, 188]);
+  return mkPath([...roof, [477, 188], [CPD_B.devX, 188], [bx, 188]], [CPD_B.devX, 188]);
 }
 function pointAt(P, d) {
   for (let i = 0; i < P.segs.length; i++) {
@@ -304,6 +327,11 @@ function drawOfficeBG(paths) {
     else if (t === 'nube') { rect(g, px, py, T, T, C.nube); for (let yy = 2; yy < T; yy += 4) for (let xx = 2; xx < T; xx += 4) rect(g, px + xx, py + yy, 1, 1, C.nubeDot); }
     else if (t === 'casa') { rect(g, px, py, T, T, C.casa); for (let yy = 0; yy < T; yy++) for (let xx = 0; xx < T; xx++) if ((px + xx + py + yy) % 8 === 0) rect(g, px + xx, py + yy, 1, 1, C.casaDot); }
     else if (t === 'office') rect(g, px, py, T, T, C.office);
+    else if (t === 'cpd') {
+      // Suelo técnico: baldosas con junta y, en el pasillo frío delante de los racks, rejilla perforada.
+      rect(g, px, py, T, T, C.cpd); rect(g, px, py, T, 1, C.cpdLine); rect(g, px, py, 1, T, C.cpdLine); rect(g, px + 1, py + 1, T - 1, 1, C.cpdHi);
+      if (y === 17 && x >= 27 && x <= 33) for (let yy = 4; yy < T - 2; yy += 3) for (let xx = 4; xx < T - 2; xx += 3) rect(g, px + xx, py + yy, 1, 1, C.cpdVent);
+    }
     else { rect(g, px, py, T, T, C.wall); rect(g, px, py, 1, T, C.wallHi); rect(g, px + T - 1, py, 1, T, C.wallLo); }
   }
   for (let y = 192; y < 336; y++) if (y % 5 === 0) rect(g, 16, y, 224, 1, C.officeSeam);
@@ -313,7 +341,14 @@ function drawOfficeBG(paths) {
   rect(g, 16, 176, 224, 4, C.cap); rect(g, 16, 180, 224, 10, C.face); rect(g, 16, 190, 224, 2, C.base);
   rect(g, 0, 32, W, 2, 'rgba(0,0,0,.35)'); rect(g, 0, 34, W, 2, 'rgba(0,0,0,.16)');
   rect(g, 16, 192, 224, 2, 'rgba(0,0,0,.35)');
-  for (const [x, y0] of [[15, 5], [15, 15], [24, 12]]) { rect(g, x * T, y0 * T - 2, T, 2, C.cap); rect(g, x * T, (y0 + 2) * T, T, 2, C.cap); }
+  // Pared norte del CPD, con el aire acondicionado y el paso de cables hacia las mesas de casa.
+  rect(g, 400, 192, 224, 4, C.cap); rect(g, 400, 196, 224, 10, C.face); rect(g, 400, 206, 224, 2, C.base);
+  rect(g, 400, 208, 224, 2, 'rgba(0,0,0,.35)'); rect(g, 400, 210, 224, 2, 'rgba(0,0,0,.16)');
+  spr(g, [[566, 194, 44, 11, '#c9ccd3']]); rect(g, 566, 194, 44, 1, '#e4e6ea');
+  for (const y of [200, 202]) rect(g, 569, y, 38, 1, '#8a8f99');
+  rect(g, 604, 196, 2, 1, C.ok);
+  spr(g, [[ROUTER_PT[0] - 4, 194, 8, 12, '#3a3e4a']]); rect(g, ROUTER_PT[0] - 3, 195, 6, 1, '#4a4f5c');
+  for (const [x, y0] of [[15, 5], [15, 15], [24, 9], [24, 16]]) { rect(g, x * T, y0 * T - 2, T, 2, C.cap); rect(g, x * T, (y0 + 2) * T, T, 2, C.cap); }
   spr(g, [[302, 5, 36, 26, '#0e1015']]);
   rect(g, 304, 8, 15, 22, '#13233a'); rect(g, 321, 8, 15, 22, '#13233a');
   rect(g, 305, 9, 2, 20, '#1d3555'); rect(g, 322, 9, 2, 20, '#1d3555');
@@ -324,18 +359,20 @@ function drawOfficeBG(paths) {
   spr(g, [[178, 181, 24, 8, '#151821']]);
   rect(g, 182, 183, 3, 2, C.info); rect(g, 189, 183, 3, 2, C.info); rect(g, 196, 183, 3, 2, C.info); rect(g, 183, 185, 14, 1, '#2d4a72');
   spr(g, [[84, 222, 72, 58, '#2b2033']]); rect(g, 87, 225, 66, 52, '#33263d'); rect(g, 90, 228, 60, 46, '#2b2033');
-  spr(g, [[472, 182, 64, 46, '#1b2638']]); rect(g, 475, 185, 58, 40, '#20304a'); rect(g, 478, 188, 52, 34, '#1b2638');
   drawCables(g, paths);
+  // Extintor junto a la puerta del CPD y bandeja de cables a lo largo de la pared.
+  spr(g, [[405, 300, 7, 15, '#c43c3c'], [406, 297, 5, 3, '#2a2d36']]); rect(g, 406, 302, 1, 10, '#e0605c'); rect(g, 405, 305, 7, 2, '#e8e4da');
+  rect(g, 404, 316, 9, 2, 'rgba(0,0,0,.3)');
   spr(g, [[94, 125, 8, 6, C.chair], [122, 125, 8, 6, C.chair]]);
   spr(g, [[86, 132, 52, 12, '#5c4030'], [86, 144, 52, 6, '#3f2b1f']]); rect(g, 86, 132, 52, 1, '#71503c');
   spr(g, [[94, 152, 8, 5, C.chair], [122, 152, 8, 5, C.chair]]);
   bookshelf(g, 20, 178, 11);
-  for (const [px, py] of [[24, 63], [232, 63], [264, 47], [376, 47], [216, 207], [216, 335], [408, 63], [616, 335]]) plant(g, px, py);
+  for (const [px, py] of [[24, 63], [232, 63], [264, 47], [376, 47], [216, 207], [216, 335], [408, 63], [616, 191]]) plant(g, px, py);
   spr(g, [[258, 322, 28, 5, '#4a3a2c']]); rect(g, 260, 327, 2, 6, '#2a2018'); rect(g, 282, 327, 2, 6, '#2a2018');
   spr(g, [[370, 302, 12, 20, '#2a2d36'], [369, 299, 14, 4, '#3a3e4a']]);
   rect(g, 372, 305, 8, 3, C.info); rect(g, 373, 312, 6, 6, '#0f1014'); rect(g, 375, 314, 2, 3, '#dddddd');
-  spr(g, [[530, 306, 56, 9, '#3b3550'], [530, 315, 56, 10, '#4a4363'], [527, 308, 4, 17, '#352f48'], [585, 308, 4, 17, '#352f48']]);
-  rect(g, 557, 315, 1, 10, '#3b3550');
+  spr(g, [[530, 162, 56, 9, '#3b3550'], [530, 171, 56, 10, '#4a4363'], [527, 164, 4, 17, '#352f48'], [585, 164, 4, 17, '#352f48']]);
+  rect(g, 557, 171, 1, 10, '#3b3550');
   return c;
 }
 
@@ -374,6 +411,15 @@ function drawBuildingBG(paths) {
     if (f.key === 'casa') for (let y = y0; y < y0 + 58; y++) for (let x = RX0; x < RX1; x++) if ((x + y) % 8 === 0) rect(g, x, y, 1, 1, pat);
     if (f.key === 'baja') { for (let x = RX0; x < RX1; x += 16) rect(g, x, y0, 1, 58, pat); for (let y = y0 + 15; y < y0 + 58; y += 16) rect(g, RX0, y, RX1 - RX0, 1, pat); }
     rect(g, RX0, y0 + 58, RX1 - RX0, 6, strip); rect(g, RX0, y0 + 58, RX1 - RX0, 1, shade(strip, 1.3));
+    if (f.key === 'casa') {
+      // El CPD al fondo de la planta 1: paneles fríos, suelo técnico y tabique.
+      const cx0 = CPD_B.x, cw = RX1 - cx0;
+      rect(g, cx0, y0, cw, 58, '#1a1e26');
+      for (let x = cx0 + 12; x < RX1; x += 13) rect(g, x, y0, 1, 58, '#151920');
+      rect(g, cx0, y0 + 58, cw, 6, C.cpd); rect(g, cx0, y0 + 58, cw, 1, C.cpdHi);
+      for (let x = cx0; x < RX1; x += 12) rect(g, x, y0 + 58, 1, 6, C.cpdLine);
+      rect(g, cx0 - 4, y0, 4, 64, C.wall); rect(g, cx0 - 4, y0, 1, 64, C.wallHi); rect(g, cx0 - 1, y0, 1, 64, C.wallLo);
+    }
     rect(g, RX0, y0, RX1 - RX0, 2, 'rgba(0,0,0,.4)');
     for (let x = RX0 + 40; x < RX1 - 20; x += 90) rect(g, x, y0 + 1, 10, 1, '#4a4f5c');
     rect(g, BX0, y0 + 64, BX1 - BX0, 6, C.slab); rect(g, BX0, y0 + 64, BX1 - BX0, 1, C.slabHi);
@@ -397,8 +443,11 @@ function drawBuildingBG(paths) {
   spr(g, [[378, y0 + 46, 58, 10, '#5c4030'], [378, y0 + 56, 58, 8, '#3f2b1f']]); rect(g, 378, y0 + 46, 58, 1, '#71503c');
   plant(g, 134, y0 + 64); plant(g, 462, y0 + 64);
   y0 = FLOORS[FI.casa].y0;
-  nightWindow(g, 206, y0 + 6, 32, 18, 41); nightWindow(g, 296, y0 + 6, 32, 18, 42); nightWindow(g, 384, y0 + 6, 22, 18, 43);
-  plant(g, 134, y0 + 64); plant(g, 458, y0 + 64);
+  nightWindow(g, 206, y0 + 6, 32, 18, 41); nightWindow(g, 296, y0 + 6, 32, 18, 42);
+  plant(g, 134, y0 + 64);
+  // Bajada del cable del techo al router y extintor.
+  rect(g, CPD_B.devX - 1, y0 + 3, 3, 11, C.cable); rect(g, CPD_B.devX - 1, y0 + 3, 1, 11, C.cableHi);
+  spr(g, [[429, y0 + 45, 6, 13, '#c43c3c'], [430, y0 + 42, 4, 3, '#2a2d36']]); rect(g, 430, y0 + 47, 1, 9, '#e0605c'); rect(g, 429, y0 + 50, 6, 2, '#e8e4da');
   y0 = FLOORS[FI.baja].y0;
   spr(g, [[124, y0 + 10, 42, 54, '#0e1015']]);
   rect(g, 126, y0 + 12, 18, 52, '#13233a'); rect(g, 146, y0 + 12, 18, 52, '#13233a');
@@ -487,14 +536,30 @@ export function createScene(o: SceneOptions) {
   function place(el, x, y) { el.style.left = (x / W) * 100 + '%'; el.style.top = (y / H) * 100 + '%'; }
   function addLabel(where, cls, html, x, y) { const el = document.createElement('div'); el.className = cls; el.innerHTML = html; place(el, x, y); overlays[where].append(el); return el; }
   addLabel('oficina', 'sc-room', 'Planta 2 · Nube', 22, 170);
-  addLabel('oficina', 'sc-room', 'Planta 1 · Casa', 412, 296);
+  addLabel('oficina', 'sc-room', 'Planta 1 · Casa', 412, 180);
+  addLabel('oficina', 'sc-room', 'Planta 1 · CPD', 412, 326);
   addLabel('oficina', 'sc-room', 'Ático · Despacho', 22, 326);
   addLabel('oficina', 'sc-company', '<b>marcogugliandolo.com</b><span>Planta baja · Recepción</span>', 320, 262);
   addLabel('oficina', 'sc-sign', 'Internet', 320, 1.5);
-  addLabel('oficina', 'sc-plate sc-static', 'Router', 504, 218);
   addLabel('edificio', 'sc-rooftop', 'marcogugliandolo.com', 320, 25);
   addLabel('edificio', 'sc-sign sc-left', 'Internet', 503, 3);
-  addLabel('edificio', 'sc-plate sc-static', 'Router', 422, FLOORS[FI.casa].y0 + 14);
+  addLabel('edificio', 'sc-room', 'CPD', CPD_B.x + 3, FLOORS[FI.casa].y0 + 9);
+
+  /* Equipo de red del CPD: los nodos del esquema que no son servidores (router, firewall…). */
+  let net: SceneNetDevice[] = [DEFAULT_ROUTER], netSig = '', netPlates = [];
+  function setNet(list: SceneNetDevice[]) {
+    const next = list.length ? list.slice(0, NET_X.length) : [DEFAULT_ROUTER];
+    const sig = JSON.stringify(next);
+    if (sig === netSig) return;
+    netSig = sig; net = next;
+    for (const el of netPlates) el.remove();
+    const withIp = net.length === 1;
+    netPlates = net.map((d, i) =>
+      addLabel('oficina', 'sc-plate sc-static', esc(d.title) + (withIp && d.detail ? ` · ${esc(d.detail)}` : ''), NET_X[i], 284),
+    );
+    netPlates.push(addLabel('edificio', 'sc-plate sc-static', esc(net[0].title), CPD_B.devX, FLOORS[FI.casa].y0 + 41));
+  }
+  setNet([]);
   const bossPlates = [addLabel('oficina', 'sc-plate sc-static', 'Tú', 120, 270), addLabel('edificio', 'sc-plate sc-static', 'Tú', BOSS.bx, FLOORS[FI.atico].y0 + 54)];
   const floorTags = FLOORS.map((f) => {
     const b = document.createElement('button');
@@ -571,7 +636,8 @@ export function createScene(o: SceneOptions) {
   relayout();
 
   /* --- Datos que llegan del panel --- */
-  function setData(servers: SceneServer[], webs: SceneWeb[]) {
+  function setData(servers: SceneServer[], webs: SceneWeb[], netDevices: SceneNetDevice[] = []) {
+    setNet(netDevices);
     const keys = new Set(servers.map((s) => s.key));
     let changed = false;
     for (const [k, a] of byKey) if (!keys.has(k)) { for (const el of [...a.plates, ...a.bubbles]) el.remove(); byKey.delete(k); changed = true; }
@@ -670,20 +736,77 @@ export function createScene(o: SceneOptions) {
   }
   function routerLed(a, now) { return !a.online ? '#4a1a1a' : now - (routerFlash[a.key] || 0) < 110 ? '#ffffff' : C.ok; }
   function casaActors() { return actors.filter((a) => a.floor === 'casa'); }
-  function drawRouter(g, now) {
-    const x = 488, y = 196;
+  const wanBlink = (now) => (Math.floor(now / 400) % 2 ? C.info : '#1d3555');
+
+  /* Aparatos de red del esquema. (x, y) es la esquina superior izquierda de la caja; la base queda en y + 16. */
+  function drawNetDevice(g, now, kind, cx, y, linked) {
+    const x = cx - 16;
     rect(g, x + 2, y + 16, 30, 3, 'rgba(0,0,0,.35)');
-    spr(g, [[x, y, 32, 10, '#3a3f4c'], [x, y + 10, 32, 6, '#2a2e38']]); rect(g, x, y, 32, 1, '#4a505e');
-    spr(g, [[x + 4, y - 6, 24, 8, '#16181d'], [x + 6, y - 12, 1, 6, '#2a2d36'], [x + 25, y - 12, 1, 6, '#2a2d36']]);
-    casaActors().forEach((a, i) => rect(g, x + 8 + i * 6, y - 3, 3, 1, routerLed(a, now)));
-    rect(g, x + 24, y - 3, 1, 1, Math.floor(now / 400) % 2 ? C.info : '#1d3555');
+    if (kind === 'router') {
+      spr(g, [[x, y, 32, 10, '#3a3f4c'], [x, y + 10, 32, 6, '#2a2e38']]); rect(g, x, y, 32, 1, '#4a505e');
+      spr(g, [[x + 4, y - 6, 24, 8, '#16181d'], [x + 6, y - 12, 1, 6, '#2a2d36'], [x + 25, y - 12, 1, 6, '#2a2d36']]);
+      if (linked) casaActors().slice(0, 3).forEach((a, i) => rect(g, x + 8 + i * 6, y - 3, 3, 1, routerLed(a, now)));
+      rect(g, x + 24, y - 3, 1, 1, wanBlink(now));
+    } else if (kind === 'firewall') {
+      spr(g, [[x + 2, y + 2, 28, 8, '#4a2f2a'], [x + 2, y + 10, 28, 6, '#33211d']]); rect(g, x + 2, y + 2, 28, 1, '#6a443c');
+      rect(g, x + 4, y + 12, 24, 1, '#e08a3c');
+      for (let i = 0; i < 4; i++) rect(g, x + 6 + i * 5, y + 5, 2, 1, Math.floor(now / 300 + i) % 3 ? C.ok : '#0f3a26');
+    } else {
+      spr(g, [[x + 4, y, 24, 10, '#3a3e4a'], [x + 4, y + 10, 24, 6, '#2a2d36']]); rect(g, x + 4, y, 24, 1, '#4a4f5c');
+      for (let i = 0; i < 3; i++) rect(g, x + 7 + i * 7, y + 3, 5, 5, '#22252d');
+      rect(g, x + 24, y + 12, 1, 1, wanBlink(now));
+    }
   }
-  function drawRack(g, now, y0) {
-    const x = 412;
-    spr(g, [[x, y0 + 20, 20, 44, '#16181d']]);
+
+  /* Racks del CPD en el plano: red (switch con una luz por equipo de casa), equipos de casa y SAI. */
+  function drawRackFrame(g, x, y) {
+    rect(g, x + 2, y + 48, 22, 3, 'rgba(0,0,0,.35)');
+    spr(g, [[x, y, 24, 5, C.rackTop], [x, y + 5, 24, 43, C.rack]]);
+    rect(g, x, y, 24, 1, '#4a4f5c'); rect(g, x + 1, y + 6, 1, 41, C.rackFrame); rect(g, x + 22, y + 6, 1, 41, C.rackFrame);
+  }
+  function drawRacksOffice(g, now) {
+    const y = 210, casa = casaActors().slice(0, 6);
+    // 1. Red: panel de parcheo, switch y bandeja.
+    let x = RACK_X[0];
+    drawRackFrame(g, x, y);
+    rect(g, x + 3, y + 8, 18, 4, C.rackUnit); for (let i = 0; i < 8; i++) rect(g, x + 4 + i * 2, y + 9, 1, 2, '#3a3e4a');
+    rect(g, x + 3, y + 14, 18, 5, C.rackUnit);
+    casa.forEach((a, i) => rect(g, x + 4 + i * 3, y + 16, 2, 1, routerLed(a, now)));
+    rect(g, x + 19, y + 16, 1, 1, wanBlink(now));
+    for (let i = 0; i < 3; i++) rect(g, x + 3, y + 22 + i * 7, 18, 5, '#191b21');
+    // 2. Un equipo por servidor de casa: luz de estado y luz de actividad.
+    x = RACK_X[1];
+    drawRackFrame(g, x, y);
+    for (let i = 0; i < 6; i++) {
+      const uy = y + 8 + i * 6.5, a = casa[i];
+      rect(g, x + 3, Math.round(uy), 18, 5, a ? C.rackUnit : '#16181d');
+      if (!a) continue;
+      for (let k = 0; k < 3; k++) rect(g, x + 9 + k * 3, Math.round(uy) + 1, 2, 3, '#262a33');
+      rect(g, x + 4, Math.round(uy) + 2, 2, 1, a.online ? TONE_COLOR[toneOf(a)] : '#3a1414');
+      rect(g, x + 19, Math.round(uy) + 2, 1, 1, routerLed(a, now));
+    }
+    // 3. SAI abajo y paneles ciegos.
+    x = RACK_X[2];
+    drawRackFrame(g, x, y);
+    for (let i = 0; i < 3; i++) rect(g, x + 3, y + 8 + i * 6, 18, 5, '#191b21');
+    rect(g, x + 3, y + 32, 18, 13, '#23262e'); rect(g, x + 5, y + 34, 8, 4, '#07140f');
+    rect(g, x + 6, y + 35, 1 + (Math.floor(now / 2000) % 5), 2, C.ok);
+    rect(g, x + 16, y + 35, 2, 1, C.ok);
+  }
+
+  /* Rack y router en el corte del edificio (planta 1, a la derecha). */
+  function drawCpdBuilding(g, now, y0) {
+    const x = CPD_B.rackX;
+    spr(g, [[x, y0 + 20, 20, 44, C.rack]]); rect(g, x, y0 + 20, 20, 1, '#3a3e4a');
     for (let i = 0; i < 4; i++) rect(g, x + 2, y0 + 23 + i * 10, 16, 8, '#202329');
-    casaActors().forEach((a, i) => { rect(g, x + 4, y0 + 26 + i * 10, 2, 1, routerLed(a, now)); rect(g, x + 8, y0 + 26 + i * 10, 8, 1, '#2f333e'); });
-    rect(g, x + 4, y0 + 56, 2, 1, Math.floor(now / 400) % 2 ? C.info : '#1d3555');
+    casaActors().slice(0, 4).forEach((a, i) => {
+      rect(g, x + 4, y0 + 26 + i * 10, 2, 1, a.online ? TONE_COLOR[toneOf(a)] : '#3a1414');
+      rect(g, x + 8, y0 + 26 + i * 10, 8, 1, '#2f333e');
+      rect(g, x + 14, y0 + 28 + i * 10, 2, 1, routerLed(a, now));
+    });
+    rect(g, x + 4, y0 + 56, 2, 1, wanBlink(now));
+    spr(g, [[CPD_B.devX - 18, y0 + 36, 36, 3, '#5c4030']]);
+    drawNetDevice(g, now, net[0].kind, CPD_B.devX, y0 + 20, true);
   }
   function drawBossDesk(g, now, cx, ty, seated) {
     spr(g, [[cx - 8, ty - 18, 16, 17, '#1b1d24'], [cx - 7, ty - 17, 14, 2, '#2a2d36', false]]);
@@ -717,7 +840,8 @@ export function createScene(o: SceneOptions) {
     drawBossTV(ctx, 106, 181);
     const list = actors.map((a) => ({ y: DESK_Y + 22, f: () => drawCubicle(ctx, a, now, a.cx, DESK_Y) }));
     list.push({ y: RECEP.topY + 23, f: () => drawReception(ctx, now, RECEP.cx, RECEP.topY) });
-    list.push({ y: 215, f: () => drawRouter(ctx, now) });
+    list.push({ y: 258, f: () => drawRacksOffice(ctx, now) });
+    net.forEach((d, i) => list.push({ y: 278, f: () => drawNetDevice(ctx, now, d.kind, NET_X[i], 262, i === 0) }));
     list.push({ y: BOSS.topY + 22, f: () => drawBossDesk(ctx, now, BOSS.cx, BOSS.topY, boss.state === 'seated') });
     if (boss.state !== 'seated') list.push({ y: boss.y, f: () => drawWalker(ctx, Math.round(boss.x), Math.round(boss.y), BOSS_LOOK, boss.dir, boss.state === 'walking' || boss.state === 'returning', boss.frame, boss.state === 'walking') });
     list.sort((p, q) => p.y - q.y);
@@ -737,7 +861,11 @@ export function createScene(o: SceneOptions) {
     glow(ctx, 320, 150, 52, '255,196,120', 0.12);
     if (RECEP.webs.some((w) => w.down) && Math.floor(now / 300) % 2) glow(ctx, 320, 152, 40, '255,77,77', 0.14);
     glow(ctx, 98, 240, 44, '120,255,190', 0.07); glow(ctx, 120, 252, 64, '255,196,120', 0.1);
-    glow(ctx, 376, 306, 12, '90,156,240', 0.3); glow(ctx, 504, 192, 22, '0,255,157', 0.08);
+    glow(ctx, 376, 306, 12, '90,156,240', 0.3);
+    // El CPD, con luz fría y el brillo de los racks.
+    glow(ctx, 512, 268, 110, '110,160,255', 0.05);
+    for (const x of RACK_X) glow(ctx, x + 12, 232, 16, '0,255,157', 0.06);
+    glow(ctx, NET_X[0], 258, 20, '0,255,157', 0.08);
     for (const p of packets) { const [x, y] = packetPos(p); glow(ctx, x, y, 6, '90,156,240', 0.45); }
     ctx.globalCompositeOperation = 'source-over';
     if (focusRoom && now < focusRoom.until) {
@@ -760,7 +888,7 @@ export function createScene(o: SceneOptions) {
     const at = FLOORS[FI.atico].y0;
     drawBossTV(ctx, 256, at + 8);
     for (const a of actors) { const p = bPos(a); drawCubicle(ctx, a, now, p.cx, p.ty); }
-    drawRack(ctx, now, FLOORS[FI.casa].y0);
+    drawCpdBuilding(ctx, now, FLOORS[FI.casa].y0);
     const rp = bPos(RECEP); drawReception(ctx, now, rp.cx, rp.ty);
     drawBossDesk(ctx, now, BOSS.bx, at + 42, boss.state === 'seated');
     const car = carFloor(), cy = 110 + car.f * 70;
@@ -795,7 +923,9 @@ export function createScene(o: SceneOptions) {
     glow(ctx, BOSS.bx - 22, at + 40, 40, '120,255,190', 0.07); glow(ctx, BOSS.bx, at + 50, 60, '255,196,120', 0.1);
     glow(ctx, 496, cy - 22, 20, '255,240,200', 0.12);
     glow(ctx, 145, FLOORS[FI.baja].y0 + 40, 40, '90,156,240', 0.1);
-    glow(ctx, 422, FLOORS[FI.casa].y0 + 40, 22, '0,255,157', 0.07);
+    glow(ctx, 438, FLOORS[FI.casa].y0 + 32, 44, '110,160,255', 0.06);
+    glow(ctx, CPD_B.devX, FLOORS[FI.casa].y0 + 20, 18, '0,255,157', 0.08);
+    glow(ctx, CPD_B.rackX + 10, FLOORS[FI.casa].y0 + 40, 16, '0,255,157', 0.06);
     for (const p of packets) { const [x, y] = packetPos(p); glow(ctx, x, y, 6, '90,156,240', 0.45); }
     ctx.globalCompositeOperation = 'source-over';
   }

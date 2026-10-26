@@ -8,18 +8,18 @@ import { containerStateMeta, HEALTH_META, isContainerProblem, MONITOR_META, type
 import { cn } from '../../lib/utils';
 import { ServerDetails } from '../server/ServerDrawer';
 import { Button, StatusBadge, useConfirm, useToast } from '../ui';
-import { createScene, lookFor, paintPortrait, RECEPTION_KEY, type FloorKey, type Scene, type SceneMode, type SceneServer } from './scene';
+import { createScene, lookFor, paintPortrait, RECEPTION_KEY, type FloorKey, type Scene, type SceneMode, type SceneNetDevice, type SceneServer } from './scene';
 
 const TEXT: Record<SceneMode, { title: string; hint: string; label: string }> = {
   oficina: {
     title: 'Oficina',
     hint: 'Todas las plantas juntas en un plano. Pulsa un empleado para ver su ficha y sus contenedores.',
-    label: 'Plano de la oficina: cada servidor es un empleado en su mesa, la recepción vigila las webs y desde el despacho llevas los encargos.',
+    label: 'Plano de la oficina: cada servidor es un empleado en su mesa, la recepción vigila las webs, el CPD guarda el router y los racks, y desde el despacho llevas los encargos.',
   },
   edificio: {
     title: 'Edificio',
     hint: 'Cada planta es una zona de tu esquema. Pulsa una planta para verla en la oficina, o un empleado para ver su ficha.',
-    label: 'Edificio de marcogugliandolo.com en corte: la antena de Internet en la azotea, tu despacho en el ático, los VPS en la planta 2, los equipos de casa en la planta 1 y la recepción abajo.',
+    label: 'Edificio de marcogugliandolo.com en corte: la antena de Internet en la azotea, tu despacho en el ático, los VPS en la planta 2, los equipos de casa y el CPD con el router en la planta 1, y la recepción abajo.',
   },
 };
 
@@ -34,6 +34,8 @@ interface LogEntry {
 interface Props {
   mode: SceneMode;
   servers: ServerView[];
+  /** Router y demás equipo de red del esquema, para el CPD. */
+  network: SceneNetDevice[];
   monitors: Monitor[] | null;
   selectedKey: string | null;
   onSelect: (key: string | null) => void;
@@ -51,11 +53,15 @@ interface Props {
 const inSchema = (s: ServerView) => Boolean(s.node && s.serverId);
 /** Ids que enviaron métricas pero no están en el esquema (normalmente ids antiguos). */
 const outsideSchema = (s: ServerView) => Boolean(!s.node && s.serverId);
+/** Primero los VPS y luego los de casa; dentro de cada planta, por nombre (RPi-01 antes que RPi-02). */
+const floorRank = (s: ServerView) => (s.node?.icon === 'Cloud' ? 0 : 1);
+const byFloorAndName = (a: ServerView, b: ServerView) =>
+  floorRank(a) - floorRank(b) || a.title.localeCompare(b.title, 'es', { numeric: true, sensitivity: 'base' });
 
 function sceneServers(servers: ServerView[]): SceneServer[] {
   return servers
     .filter(inSchema)
-    .sort((a, b) => (a.node?.y ?? 999) - (b.node?.y ?? 999) || (a.node?.x ?? 999) - (b.node?.x ?? 999))
+    .sort(byFloorAndName)
     .map((s) => ({
       key: s.key,
       serverId: s.serverId!,
@@ -100,6 +106,7 @@ function Portrait({ id, size = 'md' }: { id: string; size?: 'md' | 'lg' }) {
 export function OfficeView({
   mode,
   servers,
+  network,
   monitors,
   selectedKey,
   onSelect,
@@ -154,7 +161,7 @@ export function OfficeView({
     () => (monitors ?? []).filter((m) => m.enabled).map((m) => ({ name: m.name, down: m.status === 'down', latencyMs: m.lastCheck?.latencyMs ?? null })),
     [monitors],
   );
-  useEffect(() => sceneRef.current?.setData(sceneData, webs), [sceneData, webs]);
+  useEffect(() => sceneRef.current?.setData(sceneData, webs, network), [sceneData, webs, network]);
   useEffect(() => {
     sceneRef.current?.setMode(mode, pendingFocus.current ?? undefined);
     pendingFocus.current = null;
@@ -248,6 +255,7 @@ export function OfficeView({
             <span><b className="font-medium text-ink-2">Silla vacía y luz apagada</b> sin datos</span>
             <span><b className="font-medium text-ink-2">Puntos por los cables</b> actividad</span>
             <span><b className="font-medium text-ink-2">Ascensor</b> tú llevando un encargo</span>
+            <span><b className="font-medium text-ink-2">CPD</b> el router y un rack con una luz por equipo de casa</span>
           </div>
         </section>
 
@@ -305,6 +313,7 @@ export function OfficeView({
               <ul className="space-y-1.5">
                 {servers
                   .filter(inSchema)
+                  .sort(byFloorAndName)
                   .map((s) => {
                     const mood = moodOf(s);
                     const st = s.stats;
