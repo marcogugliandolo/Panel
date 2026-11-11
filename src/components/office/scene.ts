@@ -47,6 +47,40 @@ export interface SceneNetDevice {
 }
 const DEFAULT_ROUTER: SceneNetDevice = { key: 'router', title: 'Router', detail: null, kind: 'router' };
 
+/** Aspecto de un personaje (colores y peinado), estable por servidor. */
+export interface Look {
+  shirt: string; shirtD: string; hair: string; skin: string; skinD: string; pants: string; style: string; tie?: boolean;
+}
+/** Postura de un empleado sentado en un instante. */
+export interface AnimState {
+  lo: number; ro: number; bob: number; blink: boolean; sip: boolean; talk: boolean; sweat: boolean; sweatY: number;
+}
+export interface SnapshotTask { label: string; progress: number; done: boolean; ok: boolean | null }
+export interface SnapshotBubble { text: string; tone: string }
+export interface SnapshotActor {
+  key: string; serverId: string; title: string; floor: 'nube' | 'casa';
+  /** Centro de la mesa en el plano de la oficina (px) y baldosa donde se le entrega el encargo. */
+  cx: number; stand: [number, number];
+  online: boolean; cpu: number; ram: number; disk: number | null;
+  containers: SceneServer['containers']; hist: number[];
+  tone: 'ok' | 'warn' | 'bad'; look: Look; anim: AnimState;
+  task: SnapshotTask | null; bubble: SnapshotBubble | null; doing: string;
+  /** Cable de datos de esta mesa en el plano (px). */
+  cable: [number, number][];
+  /** Última vez que un paquete suyo pasó por el router (ms). */
+  routerFlash: number;
+}
+/** Estado de la oficina en un instante: lo que el 3D necesita para dibujarla. */
+export interface SceneSnapshot {
+  sky: 'night' | 'dawn' | 'day' | 'dusk';
+  actors: SnapshotActor[];
+  reception: { webs: SceneWeb[]; look: Look; anim: AnimState; task: SnapshotTask | null; bubble: SnapshotBubble | null; doing: string };
+  net: SceneNetDevice[];
+  boss: { state: 'seated' | 'walking' | 'handing' | 'returning'; x: number; y: number; dir: 'up' | 'down' | 'left' | 'right'; frame: number; blink: boolean; carrying: boolean; pending: number; look: Look };
+  /** Paquetes de datos por los cables, en px del plano. */
+  packets: [number, number][];
+}
+
 export interface SceneOptions {
   canvas: HTMLCanvasElement;
   world: HTMLElement;
@@ -57,8 +91,8 @@ export interface SceneOptions {
 }
 
 /* ---------- Medidas ---------- */
-const T = 16, MW = 40, MH = 22, W = MW * T, H = MH * T;
-const DESK_Y = 66;
+export const T = 16, MW = 40, MH = 22, W = MW * T, H = MH * T;
+export const DESK_Y = 66;
 const REDUCED = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 export const RECEPTION_KEY = 'reception';
 
@@ -235,7 +269,7 @@ export function skyPhase(t = Date.now()) {
   if (Math.abs(t - set) <= m) return 'dusk';
   return t > rise && t < set ? 'day' : 'night';
 }
-const SKIES = {
+export const SKIES = {
   night: { top: '#04060b', bottom: '#10162a', pane: '#0d1424', paneLo: '#111a2e', bar: '#1a1f2c', city: '#0a0d16', cityTop: '#151b2b', lit: 0.26, off: '#111624' },
   dawn: { top: '#1c2350', bottom: '#e0906a', pane: '#36457e', paneLo: '#d98b68', bar: '#2a2f45', city: '#20243a', cityTop: '#2e3350', lit: 0.12, off: '#292d45' },
   day: { top: '#3d82c6', bottom: '#a8d3f1', pane: '#5f9fd6', paneLo: '#a8d3f1', bar: '#39404e', city: '#4d5b72', cityTop: '#5f6e88', lit: 0, off: '#6c88a8' },
@@ -308,7 +342,8 @@ const SLOTS = {
   casa: [{ cx: 440, bx: 176 }, { cx: 512, bx: 266 }, { cx: 584, bx: 356 }],
 };
 
-const tiles = Array.from({ length: MH }, () => new Array(MW).fill('wall'));
+/** Plano de la oficina por baldosas de 16 px: lo usan el dibujo 2D y la oficina 3D. */
+export const tiles: string[][] = Array.from({ length: MH }, () => new Array(MW).fill('wall'));
 function area(x0, y0, x1, y1, t) { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) tiles[y][x] = t; }
 // Casa arriba a la derecha y, debajo, el CPD con el router y los racks.
 area(1, 2, 14, 10, 'nube'); area(1, 12, 14, 20, 'office'); area(16, 2, 23, 20, 'hall'); area(25, 2, 38, 11, 'casa'); area(25, 13, 38, 20, 'cpd');
@@ -326,9 +361,9 @@ function baseBlocked() {
 
 /* ---------- CPD: el router (y el resto del equipo de red del esquema) y los racks ---------- */
 /** Dónde va cada aparato de red en el plano: el primero recibe los cables de casa. */
-const NET_X = [456, 528, 592];
+export const NET_X = [456, 528, 592];
 const ROUTER_PT = [456, 272];
-const RACK_X = [444, 472, 500];
+export const RACK_X = [444, 472, 500];
 const CPD_B = { x: 400, rackX: 404, devX: 452 }; // en el corte del edificio, a la derecha de la planta 1
 
 function mkPath(pts, routerPt) {
@@ -538,7 +573,7 @@ function pickActivity(a) {
   return run.length ? activityFor(pick(run)) : a.containers.length ? 'Esperando instrucciones' : 'Vigilando el servidor';
 }
 function crashed(a) { return a.containers.filter((c) => isContainerProblem(c)); }
-function toneOf(a) {
+export function toneOf(a) {
   if (!a.online) return 'bad';
   if (crashed(a).length) return 'bad';
   if (a.cpu > THRESHOLDS.cpu || a.ram > THRESHOLDS.ram || (a.disk ?? 0) > THRESHOLDS.disk) return 'warn';
@@ -546,7 +581,7 @@ function toneOf(a) {
 }
 const TONE_RGB = { ok: '110,180,255', warn: '255,200,60', bad: '255,77,77' };
 const TONE_COLOR = { ok: C.ok, warn: C.warn, bad: C.bad, info: C.info, idle: '#6e737c' };
-function noteColor(c, now) {
+export function noteColor(c, now) {
   if (c.state === 'running') return '#46d39a';
   if (c.state === 'restarting') return Math.floor(now / 220) % 2 ? C.warn : '#7a6420';
   if (isContainerProblem(c)) return C.bad;
@@ -1197,10 +1232,35 @@ export function createScene(o: SceneOptions) {
     });
   }
 
+  /** Lo que el renderer 3D necesita para dibujar la oficina: se llama una vez por fotograma. */
+  function snapshot(): SceneSnapshot {
+    const now = Date.now();
+    const taskOf = (a) => (a.task ? { label: a.task.label, progress: a.task.result ? 1 : clamp((now - a.task.start) / 4000, 0, 0.9), done: Boolean(a.task.result), ok: a.task.result ? a.task.result.ok : null } : null);
+    const bubbleOf = (a) => (a.bubble ? { text: a.bubbles[0]?.textContent || a.bubble.text, tone: a.bubble.tone } : null);
+    const animOf = (A) => ({ lo: A.lo, ro: A.ro, bob: A.bob, blink: A.blink, sip: A.sip, talk: A.talk, sweat: A.sweat, sweatY: A.sweatY });
+    return {
+      sky,
+      actors: actors.map((a) => ({
+        key: a.key, serverId: a.serverId, title: a.title, floor: a.floor, cx: a.cx, stand: a.stand,
+        online: a.online, cpu: a.cpu, ram: a.ram, disk: a.disk, containers: a.containers, hist: a.hist,
+        tone: toneOf(a), look: a.look, anim: animOf(a.anim), task: taskOf(a), bubble: bubbleOf(a), doing: a.doing,
+        cable: a.paths.oficina.pts, routerFlash: routerFlash[a.key] || 0,
+      })),
+      reception: { webs: RECEP.webs, look: RECEP.look, anim: animOf(RECEP.anim), task: taskOf(RECEP), bubble: bubbleOf(RECEP), doing: RECEP.doing },
+      net,
+      boss: {
+        state: boss.state, x: boss.x, y: boss.y, dir: boss.dir, frame: boss.frame, blink: boss.blink,
+        carrying: boss.state === 'walking' || boss.state === 'handing', pending: boss.queue.length + (boss.job ? 1 : 0), look: BOSS_LOOK,
+      },
+      packets: packets.map((p) => { const P = p.a.paths.oficina; return pointAt(P, (p.dir > 0 ? p.u : 1 - p.u) * P.len); }),
+    };
+  }
+
   return {
     setData,
     setMode,
     order,
+    snapshot,
     setSelected(key) { selected = key; refreshPlates(); },
     /** Lo que está haciendo ahora cada uno, para la plantilla. */
     doing(key) {

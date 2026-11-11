@@ -129,11 +129,15 @@ export function OfficeView({
   const callbacks = useRef({ onSelect, onFloor });
   callbacks.current = { onSelect, onFloor };
   const [log, setLog] = useState<LogEntry[]>([]);
+  const [, setSceneReady] = useState(false);
   const [, setTick] = useState(0);
   const logId = useRef(0);
   const pendingFocus = useRef<FloorKey | null>(null);
   // Plantilla comprimida: se queda en una tira de retratos y la escena gana ancho. Al abrir una ficha se despliega.
   const [rosterCollapsed, setRosterCollapsed] = useStoredState('panel:plantilla-comprimida', false);
+  // La oficina también se puede ver en 3D (solo el plano; el edificio sigue siendo el corte en pixel art).
+  const [in3d, setIn3d] = useStoredState('panel:oficina-3d', false);
+  const show3d = mode === 'oficina' && in3d;
 
   const addLog = useCallback((who: string, text: string, tone: LogEntry['tone']) => {
     setLog((entries) => [{ id: ++logId.current, t: Date.now(), who, text, tone }, ...entries].slice(0, 80));
@@ -153,6 +157,7 @@ export function OfficeView({
       },
     });
     sceneRef.current = scene;
+    setSceneReady(true);
     return () => {
       scene.destroy();
       sceneRef.current = null;
@@ -241,28 +246,38 @@ export function OfficeView({
     <div className="scrollbar-thin relative h-full overflow-y-auto">
       <div className={cn('of-main', compact && 'of-compact')}>
         <section className="of-stage" aria-labelledby="of-title">
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-line px-4 py-2.5">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line px-4 py-2">
             <h2 id="of-title" className="text-sm font-semibold">{text.title}</h2>
-            <p className="text-[12.5px] text-ink-3">{text.hint}</p>
+            <p className="min-w-0 flex-1 text-[12.5px] text-ink-3">{mode === 'oficina' && in3d ? 'Arrastra para girar, rueda para acercar. Pulsa un empleado para ver su ficha.' : text.hint}</p>
+            {mode === 'oficina' && (
+              <div role="group" aria-label="Cómo ver la oficina" className="flex rounded-lg border border-line p-0.5">
+                {([['2d', '2D'], ['3d', '3D']] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={in3d === (value === '3d')}
+                    onClick={() => setIn3d(value === '3d')}
+                    className={cn(
+                      'rounded-md px-2.5 py-1 text-xs font-semibold transition-colors',
+                      in3d === (value === '3d') ? 'bg-white/10 text-white' : 'text-ink-3 hover:text-ink',
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-          <div ref={scrollRef} className="scrollbar-thin overflow-x-auto overflow-y-hidden">
+          <div ref={scrollRef} className="scrollbar-thin overflow-x-auto overflow-y-hidden" hidden={show3d}>
             <div ref={worldRef} className="sc-world">
               <canvas ref={canvasRef} role="img" aria-label={text.label} />
               <div ref={ovOficinaRef} className="sc-overlay" />
               <div ref={ovEdificioRef} className="sc-overlay" hidden />
             </div>
           </div>
-          <div className="flex flex-wrap gap-x-[18px] gap-y-1.5 border-t border-line px-4 py-2.5 text-xs text-ink-3">
-            <span className="text-ink-2 md:hidden">Desliza para ver toda la escena.</span>
-            <span><b className="font-medium text-ink-2">Pantalla de la pared</b> CPU, RAM y disco</span>
-            <span><b className="font-medium text-ink-2">Teclea más rápido</b> más CPU</span>
-            <span><b className="font-medium text-ink-2">Papeles</b> RAM</span>
-            <span><b className="font-medium text-ink-2">Notas del corcho</b> contenedores</span>
-            <span><b className="font-medium text-ink-2">Silla vacía y luz apagada</b> sin datos</span>
-            <span><b className="font-medium text-ink-2">Puntos por los cables</b> actividad</span>
-            <span><b className="font-medium text-ink-2">Ascensor</b> tú llevando un encargo</span>
-            <span><b className="font-medium text-ink-2">CPD</b> el router y un rack con una luz por equipo de casa</span>
-          </div>
+          {show3d && (
+            <Office3DStage scene={sceneRef.current} selectedKey={selectedKey} onSelect={(key) => callbacks.current.onSelect(key)} label={text.label} />
+          )}
         </section>
 
         <aside ref={sideRef} className="of-side" aria-label="Plantilla y ficha">
@@ -468,6 +483,48 @@ export function OfficeView({
           )}
         </section>
       </div>
+    </div>
+  );
+}
+
+/** La oficina en 3D. Three.js se carga solo cuando hace falta: quien use el 2D no lo descarga. */
+function Office3DStage({ scene, selectedKey, onSelect, label }: { scene: Scene | null; selectedKey: string | null; onSelect: (key: string) => void; label: string }) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<import('./office3d').Office3D | null>(null);
+  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const select = useRef(onSelect);
+  select.current = onSelect;
+
+  useEffect(() => {
+    if (!scene) return;
+    let alive = true;
+    import('./office3d')
+      .then((m) => {
+        if (!alive || !boxRef.current || !overlayRef.current) return;
+        viewRef.current = m.createOffice3D({ container: boxRef.current, overlay: overlayRef.current, scene, onSelect: (key) => select.current(key) });
+        setState('ready');
+      })
+      .catch(() => alive && setState('error'));
+    return () => {
+      alive = false;
+      viewRef.current?.destroy();
+      viewRef.current = null;
+    };
+  }, [scene]);
+  useEffect(() => viewRef.current?.setSelected(selectedKey), [selectedKey, state]);
+
+  return (
+    <div className="sc-3d">
+      <div ref={boxRef} className="sc-3d-canvas" role="img" aria-label={label} />
+      <div ref={overlayRef} className="sc-overlay" />
+      {state === 'loading' && <p className="sc-3d-msg">Montando la oficina en 3D…</p>}
+      {state === 'error' && <p className="sc-3d-msg">No se pudo cargar el 3D. Prueba a recargar o vuelve al 2D.</p>}
+      {state === 'ready' && (
+        <button type="button" onClick={() => viewRef.current?.resetCamera()} className="sc-3d-reset">
+          Vista general
+        </button>
+      )}
     </div>
   );
 }

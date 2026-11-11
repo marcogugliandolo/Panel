@@ -122,6 +122,19 @@
 .sc-world canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .sc-world::after { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; box-shadow: inset 0 0 90px rgb(0 0 0 / 0.5); }
 .sc-overlay { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+/* Oficina en 3D: ocupa el mismo hueco que el plano, sin desplazamiento horizontal. */
+.sc-3d { position: relative; width: 100%; aspect-ratio: 640 / 352; min-height: 320px; overflow: hidden; background: #07080a; touch-action: none; }
+.sc-3d-canvas { position: absolute; inset: 0; }
+.sc-3d-canvas canvas { width: 100%; height: 100%; }
+.sc-3d .sc-overlay { overflow: hidden; }
+.sc-3d .sc-plate, .sc-3d .sc-bubble, .sc-3d .sc-room, .sc-3d .sc-company { will-change: left, top; }
+.sc-3d .sc-bubble { transition: opacity 0.18s; }
+.sc-3d-msg { position: absolute; inset: 0; display: grid; place-items: center; font: 500 13px var(--font-pixel); color: var(--color-ink-3); pointer-events: none; }
+.sc-3d-reset {
+  position: absolute; right: 10px; bottom: 10px; z-index: 3; padding: 4px 9px 5px; border-radius: 6px; border: 1px solid rgb(255 255 255 / 0.14);
+  background: rgb(8 9 12 / 0.84); font: 500 12px/1.1 var(--font-pixel); color: var(--color-ink-2);
+}
+.sc-3d-reset:hover { color: var(--color-ink); border-color: rgb(255 255 255 / 0.34); }
 .sc-plate {
   position: absolute; transform: translate(-50%, 0); pointer-events: auto; display: inline-flex; align-items: center; gap: 5px;
   padding: 2px 7px 3px; border-radius: 5px; border: 1px solid rgb(255 255 255 / 0.14); background: rgb(8 9 12 / 0.84);
