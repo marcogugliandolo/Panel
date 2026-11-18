@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, Bell, Briefcase, Building2, Edit2, Info, LogOut, Network, Save, Settings2, ShieldCheck, X } from 'lucide-react';
+import { Activity, AlertTriangle, Bell, Briefcase, Building2, Edit2, Info, KeyRound, LogOut, Network, Save, Settings2, ShieldCheck, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '../lib/utils';
 import type { PanelAlert } from '../lib/status';
@@ -26,6 +26,7 @@ interface HeaderProps {
   onRestoreDismissed: () => void;
   onOpenAlert: (alert: PanelAlert) => void;
   onLogout: () => void;
+  onOpenSecurity: () => void;
   username?: string;
   connectionError: string | null;
   isEditing: boolean;
@@ -41,6 +42,7 @@ export function Header({
   onRestoreDismissed,
   onOpenAlert,
   onLogout,
+  onOpenSecurity,
   username,
   connectionError,
   isEditing,
@@ -142,8 +144,18 @@ export function Header({
 
         <button
           type="button"
+          onClick={onOpenSecurity}
+          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold text-white transition-all hover:bg-white/10 md:ml-2"
+          title="Seguridad (doble factor)"
+          aria-label="Seguridad"
+        >
+          <KeyRound size={16} aria-hidden />
+        </button>
+
+        <button
+          type="button"
           onClick={onLogout}
-          className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm font-bold text-red-400 transition-all hover:bg-red-500/20 md:ml-2"
+          className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm font-bold text-red-400 transition-all hover:bg-red-500/20"
           title={username ? `Cerrar sesión (${username})` : 'Cerrar sesión'}
           aria-label="Cerrar sesión"
         >

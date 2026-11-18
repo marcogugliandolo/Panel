@@ -14,6 +14,8 @@ export const config = {
   username: process.env.PANEL_USERNAME || 'admin',
   password: process.env.PANEL_PASSWORD || '',
   sessionDays: positiveNumber('SESSION_DAYS', 30),
+  // Desactiva el doble factor al arrancar (si pierdes el móvil y los códigos de recuperación). Quítala después.
+  twoFactorReset: /^(1|true|si|sí|yes)$/i.test(process.env.PANEL_2FA_RESET || ''),
 
   // Token que deben enviar los scripts de métricas. Vacío = se aceptan envíos sin token.
   statsToken: process.env.STATS_TOKEN || '',

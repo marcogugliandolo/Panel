@@ -61,6 +61,22 @@ async function request<T>(path: string, options: { method?: string; body?: unkno
 export interface Session {
   authenticated: boolean;
   username?: string;
+  /** Contraseña correcta pero falta el código del doble factor. */
+  twoFactor?: boolean;
+  ticket?: string;
+  /** Solo si se ha entrado con un código de recuperación. */
+  recoveryLeft?: number;
+}
+
+export interface TwoFactorStatus {
+  enabled: boolean;
+  enabledAt: number | null;
+  recoveryLeft: number;
+}
+export interface TwoFactorSetup {
+  secret: string;
+  uri: string;
+  qr: string;
 }
 
 const enc = encodeURIComponent;
@@ -69,7 +85,16 @@ export const api = {
   me: () => request<Session>('/auth/me'),
   login: (username: string, password: string) =>
     request<Session>('/auth/login', { method: 'POST', body: { username, password } }),
+  loginCode: (ticket: string, code: string) => request<Session>('/auth/login/code', { method: 'POST', body: { ticket, code } }),
   logout: () => request<Session>('/auth/logout', { method: 'POST' }),
+
+  twoFactor: () => request<TwoFactorStatus>('/auth/2fa'),
+  twoFactorSetup: () => request<TwoFactorSetup>('/auth/2fa/setup', { method: 'POST' }),
+  twoFactorEnable: (code: string) =>
+    request<{ recoveryCodes: string[]; closedSessions: number }>('/auth/2fa/enable', { method: 'POST', body: { code } }),
+  twoFactorDisable: (password: string, code: string) =>
+    request<TwoFactorStatus>('/auth/2fa/disable', { method: 'POST', body: { password, code } }),
+  twoFactorRecovery: (code: string) => request<{ recoveryCodes: string[] }>('/auth/2fa/recovery', { method: 'POST', body: { code } }),
 
   stats: () => request<ServerStats[]>('/stats'),
   history: (serverId: string, range: HistoryRange) =>
