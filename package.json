@@ -28,7 +28,6 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@types/three": "^0.187.0",
     "@vitejs/plugin-react": "^5.0.4",
     "clsx": "^2.1.1",
     "esbuild": "^0.25.0",
@@ -39,7 +38,6 @@
     "recharts": "^3.8.1",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.1.14",
-    "three": "^0.187.0",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"

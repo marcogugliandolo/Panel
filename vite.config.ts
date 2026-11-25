@@ -11,8 +11,6 @@ export default defineConfig({
         // Las librerías cambian poco: en su propio fichero, el navegador las mantiene en caché entre versiones.
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined;
-          // Three.js solo lo descarga quien abre la oficina en 3D.
-          if (/[\\/]three[\\/]/.test(id)) return 'three';
           if (/[\\/](recharts|d3-[^\\/]+|victory-vendor|@reduxjs|redux|react-redux|reselect|immer|decimal\.js-light|es-toolkit|eventemitter3)[\\/]/.test(id)) {
             return 'charts';
           }
