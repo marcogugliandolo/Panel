@@ -68,6 +68,30 @@ export interface Session {
   recoveryLeft?: number;
 }
 
+export interface NotifyRules {
+  servers: boolean;
+  containers: boolean;
+  webs: boolean;
+  certs: boolean;
+  resources: boolean;
+}
+export interface NotifyStatus {
+  active: boolean;
+  source: 'panel' | 'env';
+  bot: { username: string; name: string } | null;
+  hasToken: boolean;
+  chat: { id: string; title: string } | null;
+  rules: NotifyRules;
+  lastSentAt: number | null;
+  lastError: string | null;
+  problems: string[];
+}
+export interface TelegramChat {
+  id: string;
+  title: string;
+  type: string;
+}
+
 export interface TwoFactorStatus {
   enabled: boolean;
   enabledAt: number | null;
@@ -87,6 +111,15 @@ export const api = {
     request<Session>('/auth/login', { method: 'POST', body: { username, password } }),
   loginCode: (ticket: string, code: string) => request<Session>('/auth/login/code', { method: 'POST', body: { ticket, code } }),
   logout: () => request<Session>('/auth/logout', { method: 'POST' }),
+
+  notify: () => request<NotifyStatus>('/notify'),
+  notifyBot: (token: string) => request<NotifyStatus>('/notify/bot', { method: 'POST', body: { token } }),
+  notifyChats: () => request<TelegramChat[]>('/notify/chats'),
+  notifyChat: (chat: TelegramChat) =>
+    request<NotifyStatus>('/notify/chat', { method: 'POST', body: { chatId: chat.id, title: chat.title, panelUrl: window.location.origin } }),
+  notifyRules: (rules: Partial<NotifyRules>) => request<NotifyStatus>('/notify/rules', { method: 'PUT', body: rules }),
+  notifyTest: () => request<NotifyStatus>('/notify/test', { method: 'POST' }),
+  notifyDisconnect: () => request<NotifyStatus>('/notify', { method: 'DELETE' }),
 
   twoFactor: () => request<TwoFactorStatus>('/auth/2fa'),
   twoFactorSetup: () => request<TwoFactorSetup>('/auth/2fa/setup', { method: 'POST' }),

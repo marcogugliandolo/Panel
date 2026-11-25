@@ -66,27 +66,29 @@ function sanitizeLayout(body: any): Layout {
   return { nodes, zones, wires };
 }
 
+/** Último esquema guardado (o el inicial). También lo usa el aviso por Telegram para saber qué servidores vigilar. */
+export function readLayout(db: DB): { layout: Layout; saved: boolean } {
+  const row = db.prepare('SELECT nodes, zones, wires FROM layout ORDER BY id DESC LIMIT 1').get() as
+    | { nodes: string; zones: string; wires: string | null }
+    | undefined;
+  if (!row) return { layout: DEFAULT_LAYOUT, saved: false };
+  try {
+    const nodes = JSON.parse(row.nodes);
+    const zones = JSON.parse(row.zones);
+    // Los diseños guardados con la versión anterior no tienen conexiones: se usan las de siempre.
+    const wires = row.wires ? JSON.parse(row.wires) : DEFAULT_WIRES;
+    return { layout: sanitizeLayout({ nodes, zones, wires }), saved: true };
+  } catch (error) {
+    console.error('[layout] Diseño guardado ilegible, se usa el inicial:', error);
+    return { layout: DEFAULT_LAYOUT, saved: false };
+  }
+}
+
 export function createLayoutRouter(db: DB) {
   const router = express.Router();
 
   router.get('/', (_req, res) => {
-    const row = db.prepare('SELECT nodes, zones, wires FROM layout ORDER BY id DESC LIMIT 1').get() as
-      | { nodes: string; zones: string; wires: string | null }
-      | undefined;
-    if (!row) {
-      res.json({ layout: DEFAULT_LAYOUT, saved: false });
-      return;
-    }
-    try {
-      const nodes = JSON.parse(row.nodes);
-      const zones = JSON.parse(row.zones);
-      // Los diseños guardados con la versión anterior no tienen conexiones: se usan las de siempre.
-      const wires = row.wires ? JSON.parse(row.wires) : DEFAULT_WIRES;
-      res.json({ layout: sanitizeLayout({ nodes, zones, wires }), saved: true });
-    } catch (error) {
-      console.error('[layout] Diseño guardado ilegible, se usa el inicial:', error);
-      res.json({ layout: DEFAULT_LAYOUT, saved: false });
-    }
+    res.json(readLayout(db));
   });
 
   const save: express.RequestHandler = (req, res) => {

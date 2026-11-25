@@ -14,6 +14,11 @@ export const config = {
   username: process.env.PANEL_USERNAME || 'admin',
   password: process.env.PANEL_PASSWORD || '',
   sessionDays: positiveNumber('SESSION_DAYS', 30),
+  // Avisos por Telegram. Lo normal es configurarlos desde el panel; estas variables, si están, mandan.
+  telegramToken: (process.env.TELEGRAM_BOT_TOKEN || '').trim(),
+  telegramChatId: (process.env.TELEGRAM_CHAT_ID || '').trim(),
+  telegramApiUrl: (process.env.TELEGRAM_API_URL || 'https://api.telegram.org').replace(/\/+$/, ''),
+  notifyIntervalMs: positiveNumber('NOTIFY_INTERVAL_SECONDS', 60) * 1000,
   // Desactiva el doble factor al arrancar (si pierdes el móvil y los códigos de recuperación). Quítala después.
   twoFactorReset: /^(1|true|si|sí|yes)$/i.test(process.env.PANEL_2FA_RESET || ''),
 

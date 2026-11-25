@@ -1,4 +1,5 @@
 import { THRESHOLDS, type ContainerInfo, type LayoutNode, type Monitor, type MonitorStatus, type ServerStats } from '../../shared/types';
+import { exitCode, isContainerProblem } from '../../shared/health';
 import { daysUntil, formatPercent, timeAgo } from './format';
 
 export type Tone = 'ok' | 'warn' | 'bad' | 'idle';
@@ -38,20 +39,7 @@ const STATE_LABELS: Record<string, string> = {
   unknown: 'Reportado',
 };
 
-function exitCode(container: Pick<ContainerInfo, 'status'>): number | null {
-  const match = /exited \((\d+)\)/i.exec(container.status ?? '');
-  return match ? Number(match[1]) : null;
-}
-
-/** Un contenedor parado limpiamente (código 0) no es un problema: suele ser una tarea puntual. */
-export function isContainerProblem(container: Pick<ContainerInfo, 'state' | 'status'>): boolean {
-  if (container.state === 'restarting' || container.state === 'dead') return true;
-  if (container.state === 'exited') {
-    const code = exitCode(container);
-    return code !== null && code !== 0;
-  }
-  return false;
-}
+export { exitCode, isContainerProblem };
 
 export function containerStateMeta(container: Pick<ContainerInfo, 'state' | 'status'>): { label: string; tone: Tone } {
   const label = STATE_LABELS[container.state] ?? container.state;

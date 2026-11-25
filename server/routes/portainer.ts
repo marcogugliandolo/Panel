@@ -110,7 +110,12 @@ const wrap =
     });
   };
 
-export function createPortainerRouter() {
+export interface PortainerHooks {
+  /** Se llama tras arrancar, parar o reiniciar un contenedor desde el panel (para no avisar por Telegram de una parada hecha a propósito). */
+  onContainerAction?: (endpointId: number, containerName: string, action: ContainerAction) => void;
+}
+
+export function createPortainerRouter(hooks: PortainerHooks = {}) {
   const router = express.Router();
 
   router.get(
@@ -174,6 +179,14 @@ export function createPortainerRouter() {
         body: '{}',
       });
       console.log(`[portainer] ${res.locals.username} → ${action} ${containerId.slice(0, 12)} (entorno ${endpointId})`);
+      if (hooks.onContainerAction) {
+        try {
+          const info = (await (await portainerFetch(`/endpoints/${endpointId}/docker/containers/${containerId}/json`)).json()) as { Name?: string };
+          if (info.Name) hooks.onContainerAction(endpointId, info.Name.replace(/^\//, ''), action);
+        } catch (error) {
+          console.warn('[portainer] No se pudo leer el nombre del contenedor tras la acción:', (error as Error).message);
+        }
+      }
       res.json({ success: true });
     }),
   );

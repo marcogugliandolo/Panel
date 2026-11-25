@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, Bell, Briefcase, Building2, Edit2, Info, KeyRound, LogOut, Network, Save, Settings2, ShieldCheck, X } from 'lucide-react';
+import { Activity, AlertTriangle, Bell, Briefcase, Building2, Edit2, Info, KeyRound, LogOut, Network, Save, Send, Settings2, ShieldCheck, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '../lib/utils';
 import type { PanelAlert } from '../lib/status';
@@ -27,6 +27,7 @@ interface HeaderProps {
   onOpenAlert: (alert: PanelAlert) => void;
   onLogout: () => void;
   onOpenSecurity: () => void;
+  onOpenTelegram: () => void;
   username?: string;
   connectionError: string | null;
   isEditing: boolean;
@@ -43,6 +44,7 @@ export function Header({
   onOpenAlert,
   onLogout,
   onOpenSecurity,
+  onOpenTelegram,
   username,
   connectionError,
   isEditing,
@@ -112,6 +114,7 @@ export function Header({
             onDismiss={onDismiss}
             onRestoreDismissed={onRestoreDismissed}
             onOpenAlert={onOpenAlert}
+            onOpenTelegram={onOpenTelegram}
           />
         )}
 
@@ -174,7 +177,8 @@ function AlertsMenu({
   onDismiss,
   onRestoreDismissed,
   onOpenAlert,
-}: Pick<HeaderProps, 'alerts' | 'dismissedCount' | 'onDismiss' | 'onRestoreDismissed' | 'onOpenAlert'>) {
+  onOpenTelegram,
+}: Pick<HeaderProps, 'alerts' | 'dismissedCount' | 'onDismiss' | 'onRestoreDismissed' | 'onOpenAlert' | 'onOpenTelegram'>) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -279,6 +283,16 @@ function AlertsMenu({
               {dismissedCount === 1 ? '1 aviso oculto hoy' : `${dismissedCount} avisos ocultos hoy`} · Mostrar
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onOpenTelegram();
+            }}
+            className="flex w-full items-center justify-center gap-2 border-t border-white/5 px-4 py-2.5 text-xs text-[#8e9299] transition-colors hover:bg-white/5 hover:text-white"
+          >
+            <Send size={12} aria-hidden /> Avisos por Telegram
+          </button>
         </div>
       )}
     </div>

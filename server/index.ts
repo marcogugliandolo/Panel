@@ -6,6 +6,7 @@ import { createAuth, requireStatsToken } from './auth';
 import { config } from './config';
 import { openDatabase, pruneHistory } from './db';
 import { createMonitorService } from './monitors';
+import { createNotifier } from './notifier';
 import { createLayoutRouter } from './routes/layout';
 import { createPortainerRouter } from './routes/portainer';
 import { createIngestHandler, createStatsRouter } from './routes/stats';
@@ -33,6 +34,7 @@ async function main() {
 
   const auth = createAuth(db);
   const monitors = createMonitorService(db);
+  const notifier = createNotifier(db, monitors);
 
   // Rutas públicas
   app.get('/api/health', (_req, res) => {
@@ -46,7 +48,8 @@ async function main() {
   app.use('/api', auth.requireAuth);
   app.use('/api/stats', createStatsRouter(db));
   app.use('/api/layout', createLayoutRouter(db));
-  app.use('/api/portainer', createPortainerRouter());
+  app.use('/api/portainer', createPortainerRouter({ onContainerAction: notifier.containerAction }));
+  app.use('/api/notify', notifier.router);
   app.use('/api/monitors', monitors.router);
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'Ruta no encontrada' });
@@ -80,6 +83,7 @@ async function main() {
   pruneHistory(db);
   setInterval(() => pruneHistory(db), 3_600_000).unref();
   monitors.start();
+  notifier.start();
 
   if (!config.statsToken) {
     console.warn('[stats] STATS_TOKEN no está definido: se aceptan métricas de cualquiera. Configúralo cuando actualices los scripts.');

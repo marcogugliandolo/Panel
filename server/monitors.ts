@@ -396,6 +396,11 @@ export function createMonitorService(db: DB) {
 
   return {
     router,
+    /** Estado actual de todas las webs (para el aviso por Telegram). */
+    list(): Monitor[] {
+      const rows = db.prepare('SELECT * FROM monitors ORDER BY name COLLATE NOCASE').all() as MonitorRow[];
+      return rows.map(toMonitor);
+    },
     start() {
       seedDefaultWebs();
       tick();

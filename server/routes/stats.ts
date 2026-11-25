@@ -211,14 +211,18 @@ export function createIngestHandler(db: DB): express.RequestHandler {
   };
 }
 
+/** Métricas de todos los servidores tal como las ve la interfaz (también las usa el aviso por Telegram). */
+export function readAllStats(db: DB, now = Date.now()): ServerStats[] {
+  const rows = db.prepare('SELECT * FROM server_stats ORDER BY server_id').all() as StatsRow[];
+  return rows.map((row) => rowToStats(row, now));
+}
+
 /** Rutas de lectura para la interfaz (requieren sesión). */
 export function createStatsRouter(db: DB) {
   const router = express.Router();
 
   router.get('/', (_req, res) => {
-    const now = Date.now();
-    const rows = db.prepare('SELECT * FROM server_stats ORDER BY server_id').all() as StatsRow[];
-    res.json(rows.map((row) => rowToStats(row, now)));
+    res.json(readAllStats(db));
   });
 
   router.get('/:id/history', (req, res) => {

@@ -8,6 +8,7 @@ import { Header, type View } from './Header';
 import { OfficeView } from './office/OfficeView';
 import { RECEPTION_KEY, type SceneNetDevice } from './office/scene';
 import { SecurityDialog } from './SecurityDialog';
+import { TelegramDialog } from './TelegramDialog';
 import { ServerDrawer } from './server/ServerDrawer';
 import { TopologyCanvas } from './topology/TopologyCanvas';
 import { Spinner, useToast } from './ui';
@@ -24,6 +25,7 @@ export function Dashboard({ session, onLogout }: { session: Session; onLogout: (
   const [editing, setEditing] = useState(false);
   const [saveSignal, setSaveSignal] = useState(0);
   const [securityOpen, setSecurityOpen] = useState(false);
+  const [telegramOpen, setTelegramOpen] = useState(false);
   const toast = useToast();
   const now = useNow(15_000);
 
@@ -119,6 +121,7 @@ export function Dashboard({ session, onLogout }: { session: Session; onLogout: (
         onOpenAlert={openAlert}
         onLogout={logout}
         onOpenSecurity={() => setSecurityOpen(true)}
+        onOpenTelegram={() => setTelegramOpen(true)}
         username={session.username}
         connectionError={connectionError}
         isEditing={editing}
@@ -126,6 +129,7 @@ export function Dashboard({ session, onLogout }: { session: Session; onLogout: (
       />
 
       <SecurityDialog open={securityOpen} onClose={() => setSecurityOpen(false)} username={session.username} />
+      <TelegramDialog open={telegramOpen} onClose={() => setTelegramOpen(false)} />
 
       {connectionError && (
         <div role="alert" className="flex items-center justify-center gap-2 border-b border-bad/25 bg-bad/10 px-4 py-2 text-[13px] text-bad">
