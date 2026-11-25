@@ -24,14 +24,25 @@ export interface NotifyRules {
   webs: boolean;
   certs: boolean;
   resources: boolean;
+  /** Avisar también de los contenedores que se paran desde el propio panel. */
+  manualStops: boolean;
 }
-const DEFAULT_RULES: NotifyRules = { servers: true, containers: true, webs: true, certs: true, resources: false };
+const DEFAULT_RULES: NotifyRules = { servers: true, containers: true, webs: true, certs: true, resources: false, manualStops: false };
 
 type Kind = 'server' | 'container' | 'web' | 'cert' | 'resource';
 /** Revisiones seguidas que tiene que durar un problema antes de avisar (evita avisos por un reinicio de segundos). */
 const CONFIRM: Record<Kind, number> = { server: 1, container: 2, web: 1, cert: 1, resource: 5 };
 /** Una parada hecha desde el panel no avisa; se olvida al volver a arrancar o, como mucho, en una semana. */
 const MANUAL_STOP_MS = 7 * 86_400_000;
+/**
+ * Un contenedor cuenta como "servicio" (y avisa si se para, aunque sea con código 0) si se le ha visto en marcha al
+ * menos este tiempo seguido. Así las tareas puntuales que arrancan, hacen su trabajo y terminan no avisan.
+ */
+const SERVICE_MIN_MS = 3 * 60_000;
+/** Si entre dos revisiones en marcha pasa más que esto, se empieza a contar de nuevo. */
+const RUNNING_GAP_MS = 4 * 60_000;
+/** Un contenedor que desaparece de la lista y no vuelve en este tiempo se da por eliminado y se olvida. */
+const FORGET_MISSING_MS = 3 * 86_400_000;
 
 interface Condition {
   key: string;
@@ -71,11 +82,19 @@ function certBucket(days: number): number {
   return 14;
 }
 
-const CONTAINER_LABEL: Record<string, string> = { exited: 'parado', restarting: 'reiniciándose sin parar', dead: 'muerto' };
+const CONTAINER_LABEL: Record<string, string> = {
+  exited: 'parado',
+  stopped: 'apagado',
+  restarting: 'reiniciándose sin parar',
+  dead: 'muerto',
+  paused: 'en pausa',
+  created: 'creado pero sin arrancar',
+  removing: 'eliminándose',
+};
 function containerProblemText(c: { state: string; status?: string | null }) {
   const code = exitCode(c);
   const label = CONTAINER_LABEL[c.state] ?? c.state;
-  return code ? `${label} (código ${code})` : label;
+  return code ? `${label} con error (código ${code})` : label;
 }
 
 export function createNotifier(db: DB, monitors: { list(): Monitor[] }) {
@@ -89,6 +108,13 @@ export function createNotifier(db: DB, monitors: { list(): Monitor[] }) {
       seen INTEGER NOT NULL DEFAULT 1,
       notified INTEGER NOT NULL DEFAULT 0,
       down_text TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS notify_containers (
+      server_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      running_since INTEGER NOT NULL,
+      last_running INTEGER NOT NULL,
+      PRIMARY KEY (server_id, name)
     );
   `);
   const getStmt = db.prepare('SELECT value FROM settings WHERE key = ?');
@@ -163,13 +189,14 @@ export function createNotifier(db: DB, monitors: { list(): Monitor[] }) {
     let stopsChanged = false;
     const seenServers = new Set<string>();
 
-    for (const node of readLayout(db).layout.nodes) {
-      const sid = node.serverId;
-      if (!sid || seenServers.has(sid)) continue;
+    // Todos los servidores que envían métricas, con el nombre del esquema si lo tienen.
+    const titles = new Map<string, string>();
+    for (const node of readLayout(db).layout.nodes) if (node.serverId && !titles.has(node.serverId)) titles.set(node.serverId, node.title || node.serverId);
+    for (const stats of statsById.values()) {
+      const sid = stats.serverId;
+      if (seenServers.has(sid)) continue;
       seenServers.add(sid);
-      const stats = statsById.get(sid);
-      if (!stats) continue;
-      const name = esc(node.title || sid);
+      const name = esc(titles.get(sid) || stats.hostname || sid);
       const serverGroup = `server:${sid}`;
       const containerGroups = () => stats.containers.map((c) => `container:${sid}:${c.name}`);
       const resourceGroups = ['cpu', 'ram', 'disk'].map((k) => `res:${sid}:${k}`);
@@ -189,18 +216,56 @@ export function createNotifier(db: DB, monitors: { list(): Monitor[] }) {
       if (r.servers) present.set(serverGroup, `🟢 <b>${name}</b> vuelve a responder`);
 
       if (r.containers) {
-        for (const c of stats.containers) {
-          if (c.state === 'unknown') continue;
+        const memory = new Map(
+          (db.prepare('SELECT name, running_since, last_running FROM notify_containers WHERE server_id = ?').all(sid) as {
+            name: string;
+            running_since: number;
+            last_running: number;
+          }[]).map((m) => [m.name, m]),
+        );
+        const listed = new Set<string>();
+        const known = stats.containers.filter((c) => c.state !== 'unknown');
+        for (const c of known) {
+          listed.add(c.name);
           const group = `container:${sid}:${c.name}`;
           const mk = manualKey(sid, c.name);
+          if (c.state === 'running') {
+            const m = memory.get(c.name);
+            const since = m && now - m.last_running <= RUNNING_GAP_MS ? m.running_since : now;
+            db.prepare(
+              `INSERT INTO notify_containers (server_id, name, running_since, last_running) VALUES (?, ?, ?, ?)
+               ON CONFLICT(server_id, name) DO UPDATE SET running_since = excluded.running_since, last_running = excluded.last_running`,
+            ).run(sid, c.name, since, now);
+          }
           if (stops[mk] && (c.state === 'running' || now - stops[mk] > MANUAL_STOP_MS)) {
             delete stops[mk];
             stopsChanged = true;
           }
-          if (stops[mk]) continue; // parado a propósito: ni avisa ni "se recupera"
+          if (stops[mk] && !r.manualStops) continue; // parado a propósito desde el panel: ni avisa ni "se recupera"
           const cname = esc(c.name);
           present.set(group, c.state === 'running' ? `🟢 <b>${cname}</b> en ${name} vuelve a estar en marcha` : `🟢 <b>${cname}</b> en ${name} ya no da error`);
-          if (isContainerProblem(c)) add({ key: group, group, kind: 'container', down: `🔴 Contenedor <b>${cname}</b> en <b>${name}</b>: ${containerProblemText(c)}` });
+          if (c.state === 'running') continue;
+          const m = memory.get(c.name);
+          const wasService = Boolean(m && m.last_running - m.running_since >= SERVICE_MIN_MS);
+          if (isContainerProblem(c) || wasService) {
+            const why = stops[mk] ? `${containerProblemText(c)} desde el panel` : containerProblemText(c);
+            add({ key: group, group, kind: 'container', down: `🔴 Contenedor <b>${cname}</b> en <b>${name}</b>: ${why}`, since: m?.last_running });
+          }
+        }
+        // Los que estaban en marcha y ya no aparecen en la lista (parados con el script antiguo, o eliminados).
+        if (known.length > 0) {
+          for (const m of memory.values()) {
+            if (listed.has(m.name)) continue;
+            const group = `container:${sid}:${m.name}`;
+            if (now - m.last_running > FORGET_MISSING_MS) {
+              db.prepare('DELETE FROM notify_containers WHERE server_id = ? AND name = ?').run(sid, m.name);
+              continue;
+            }
+            if (m.last_running - m.running_since < SERVICE_MIN_MS) continue;
+            const cname = esc(m.name);
+            present.set(group, `🟢 <b>${cname}</b> en ${name} vuelve a estar en marcha`);
+            add({ key: group, group, kind: 'container', down: `🔴 Contenedor <b>${cname}</b> en <b>${name}</b>: ya no aparece (parado o eliminado)`, since: m.last_running });
+          }
         }
       }
 
@@ -280,7 +345,7 @@ export function createNotifier(db: DB, monitors: { list(): Monitor[] }) {
           continue;
         }
         const back = present.get(row.grp)!;
-        const text = row.kind === 'cert' ? back : `${back} · ${row.kind === 'web' ? 'caída' : row.kind === 'resource' ? 'alta' : 'caído'} ${duration(now - row.since)}`;
+        const text = row.kind === 'cert' ? back : `${back} · ${row.kind === 'web' ? 'caída' : row.kind === 'resource' ? 'alta' : row.kind === 'container' ? 'parado' : 'caído'} ${duration(now - row.since)}`;
         ups.push({ row, text });
       }
       if (silent.length) db.prepare(`DELETE FROM notify_state WHERE key IN (${silent.map(() => '?').join(',')})`).run(...silent);

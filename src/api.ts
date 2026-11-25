@@ -74,6 +74,7 @@ export interface NotifyRules {
   webs: boolean;
   certs: boolean;
   resources: boolean;
+  manualStops: boolean;
 }
 export interface NotifyStatus {
   active: boolean;

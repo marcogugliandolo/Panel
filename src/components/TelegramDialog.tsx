@@ -6,7 +6,8 @@ import { Button, Dialog, Field, Spinner, StatusBadge, inputClass, useToast } fro
 
 const RULES: { key: keyof NotifyRules; label: string; hint: string }[] = [
   { key: 'servers', label: 'Servidores sin respuesta', hint: 'Cuando un servidor deja de enviar datos y cuando vuelve.' },
-  { key: 'containers', label: 'Contenedores caídos', hint: 'Parados con error o reiniciándose sin parar. Los que pares tú desde el panel no avisan.' },
+  { key: 'containers', label: 'Contenedores parados o caídos', hint: 'Cuando uno que estaba en marcha se para, se cae o se reinicia sin parar. Las tareas puntuales que terminan solas no avisan.' },
+  { key: 'manualStops', label: 'También lo que pares tú desde el panel', hint: 'Si está desactivado, lo que pares con los botones del panel no avisa (sí lo que pares desde Portainer o la terminal).' },
   { key: 'webs', label: 'Webs caídas', hint: 'Dos comprobaciones fallidas seguidas, y cuando vuelven.' },
   { key: 'certs', label: 'Certificados SSL', hint: 'A 14, 7, 3 y 1 día de caducar, y cuando se renuevan.' },
   { key: 'resources', label: 'CPU, RAM o disco altos', hint: 'Si pasan del umbral durante 5 minutos seguidos.' },
