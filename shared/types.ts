@@ -16,6 +16,8 @@ export interface ContainerInfo {
   state: string;
   status?: string | null;
   image?: string | null;
+  /** Puertos tal como los da Docker («0.0.0.0:3004->3000/tcp, :::3004->3000/tcp»). */
+  ports?: string | null;
 }
 
 export interface ServerStats {
@@ -28,6 +30,8 @@ export interface ServerStats {
   appsTotal: number | null;
   appsRunning: number | null;
   containers: ContainerInfo[];
+  /** IPs del servidor (las que da `hostname -I`), si el script las envía. */
+  ips: string[];
   /** Milisegundos desde epoch del último envío del script. */
   lastUpdated: number;
   /** false si lleva más de OFFLINE_AFTER_MINUTES sin enviar datos. */
@@ -131,6 +135,28 @@ export interface MonitorCheck {
   error: string | null;
 }
 
+/** Un paso de la ruta que sigue una visita hasta la web. */
+export type RouteStepId = 'dns' | 'server' | 'tls' | 'proxy' | 'container' | 'app';
+export interface RouteStep {
+  id: RouteStepId;
+  /** Nombre corto del paso: «DNS», «Oracle», «Nginx Proxy Manager», «kreapc»… */
+  label: string;
+  /** ok: funciona · fail: aquí se rompe · warn: funciona con algo raro · skip: no se ha podido comprobar o no se llegó */
+  status: 'ok' | 'fail' | 'warn' | 'skip';
+  detail: string;
+}
+/** Dónde se ha caído una web: la ruta paso a paso y el primer punto que falla. */
+export interface Diagnosis {
+  at: number;
+  ok: boolean;
+  failedAt: RouteStepId | null;
+  title: string;
+  summary: string;
+  steps: RouteStep[];
+  /** Arreglo directo si se puede: arrancar el contenedor parado con Portainer. */
+  action: { kind: 'start-container'; endpointId: number; container: string; serverName: string } | null;
+}
+
 export interface Monitor {
   id: number;
   name: string;
@@ -151,6 +177,8 @@ export interface Monitor {
     error: string | null;
     checkedAt: number | null;
   } | null;
+  /** Último diagnóstico de la ruta (se hace solo cuando la web cae, o a mano). */
+  diagnosis: Diagnosis | null;
 }
 
 export interface MonitorInput {

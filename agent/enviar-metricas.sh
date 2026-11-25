@@ -71,8 +71,8 @@ enviar() {
   CONTAINERS=""
   RUNNING=0
   TOTAL=0
-  add_item() { # nombre estado texto_estado imagen
-    CONTAINERS="${CONTAINERS:+$CONTAINERS,}{\"name\":\"$(json_str "$1")\",\"state\":\"$(json_str "$2")\",\"status\":\"$(json_str "$3")\",\"image\":\"$(json_str "$4")\"}"
+  add_item() { # nombre estado texto_estado imagen puertos
+    CONTAINERS="${CONTAINERS:+$CONTAINERS,}{\"name\":\"$(json_str "$1")\",\"state\":\"$(json_str "$2")\",\"status\":\"$(json_str "$3")\",\"image\":\"$(json_str "$4")\",\"ports\":\"$(json_str "${5:-}")\"}"
     TOTAL=$((TOTAL + 1))
     case "$2:$3" in
       running:*) RUNNING=$((RUNNING + 1)) ;;
@@ -82,9 +82,10 @@ enviar() {
 
   if command -v docker > /dev/null 2>&1; then
     # Sin {{.State}}, que no existe en Docker antiguos: el panel deduce el estado de "Up 3 hours", "Exited (1)…".
-    if LIST=$(docker ps -a --format '{{.Names}}|{{.Status}}|{{.Image}}' 2>/dev/null); then
-      while IFS='|' read -r name status image; do
-        [ -n "$name" ] && add_item "$name" "" "$status" "$image"
+    # Los puertos sirven al panel para saber qué contenedor hay detrás de cada web de Nginx Proxy Manager.
+    if LIST=$(docker ps -a --format '{{.Names}}|{{.Status}}|{{.Image}}|{{.Ports}}' 2>/dev/null); then
+      while IFS='|' read -r name status image ports; do
+        [ -n "$name" ] && add_item "$name" "" "$status" "$image" "$ports"
       done <<< "$LIST"
     else
       echo "Aviso: no se pudo consultar Docker (¿falta permiso? ejecútalo como root)" >&2
@@ -107,7 +108,13 @@ enviar() {
   fi
 
   # 5. Enviar
-  PAYLOAD="{\"cpu\":${CPU},\"ram\":${RAM},\"disk\":${DISK},\"uptime\":${UPTIME},\"hostname\":\"$(json_str "$HOST")\",\"containers\":[${CONTAINERS}]}"
+  # IPs de este servidor (para reconocer las direcciones de destino de Nginx Proxy Manager)
+  IPS=""
+  for ip in $(hostname -I 2>/dev/null); do
+    IPS="${IPS:+$IPS,}\"$(json_str "$ip")\""
+  done
+
+  PAYLOAD="{\"cpu\":${CPU},\"ram\":${RAM},\"disk\":${DISK},\"uptime\":${UPTIME},\"hostname\":\"$(json_str "$HOST")\",\"ips\":[${IPS}],\"containers\":[${CONTAINERS}]}"
 
   if [ -n "${DRY_RUN:-}" ]; then
     echo "$PAYLOAD"

@@ -343,7 +343,12 @@ export function createNotifier(db: DB, monitors: { list(): Monitor[] }) {
         if (m.status === 'pending' || m.status === 'warning') unknown.add(group);
         else {
           present.set(group, `🟢 <b>${wname}</b> vuelve a responder`);
-          if (m.status === 'down') add({ key: `${group}:down`, group, kind: 'web', down: `🔴 Web caída: <b>${wname}</b> · ${esc(m.lastCheck?.error ?? 'no responde')}` });
+          if (m.status === 'down') {
+            // Con el diagnóstico de la ruta, el aviso dice dónde está el fallo. Se espera un poco a que esté listo.
+            const d = m.diagnosis && !m.diagnosis.ok ? m.diagnosis : null;
+            const where = d ? `\n   ↳ <b>${esc(d.title)}</b>: ${esc(d.summary)}` : '';
+            add({ key: `${group}:down`, group, kind: 'web', down: `🔴 Web caída: <b>${wname}</b> · ${esc(m.lastCheck?.error ?? 'no responde')}${where}`, minAgeMs: d ? 0 : 25_000 });
+          }
         }
       }
       if (r.certs && m.cert?.expiresAt) {

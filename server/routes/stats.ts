@@ -25,6 +25,7 @@ interface StatsRow {
   apps_running: number | null;
   container_list: string | null;
   containers: string | null;
+  ips: string | null;
   last_updated: number;
 }
 
@@ -76,6 +77,14 @@ function stateFromStatus(status: string | null): string {
   return 'unknown';
 }
 
+/** IPs que envía el script (IPv4/IPv6 sin más). */
+function toIps(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((v): v is string => typeof v === 'string' && /^[0-9a-fA-F:.]{3,45}$/.test(v))
+    .slice(0, 32);
+}
+
 /** Normaliza la lista de contenedores: admite nombres sueltos (formato antiguo) u objetos con estado. */
 function toContainers(value: unknown): ContainerInfo[] | null {
   if (!Array.isArray(value)) return null;
@@ -95,6 +104,7 @@ function toContainers(value: unknown): ContainerInfo[] | null {
         state: state && state !== 'unknown' ? state : stateFromStatus(status),
         status,
         image: cleanText(record.image ?? record.Image, 200),
+        ports: cleanText(record.ports ?? record.Ports, 400),
       });
     }
   }
@@ -138,6 +148,7 @@ function rowToStats(row: StatsRow, now: number): ServerStats {
     appsTotal: row.apps_total,
     appsRunning: row.apps_running,
     containers,
+    ips: parseJson<string[]>(row.ips, []),
     lastUpdated: row.last_updated,
     online: now - row.last_updated <= config.offlineAfterMs,
   };
@@ -149,8 +160,8 @@ export function createIngestHandler(db: DB): express.RequestHandler {
 
   const upsert = db.prepare(`
     INSERT INTO server_stats (server_id, cpu_usage, ram_usage, disk_usage, uptime_seconds, hostname,
-                              apps_total, apps_running, container_list, containers, last_updated)
-    VALUES (@serverId, @cpu, @ram, @disk, @uptime, @hostname, @appsTotal, @appsRunning, @containerList, @containers, @now)
+                              apps_total, apps_running, container_list, containers, ips, last_updated)
+    VALUES (@serverId, @cpu, @ram, @disk, @uptime, @hostname, @appsTotal, @appsRunning, @containerList, @containers, @ips, @now)
     ON CONFLICT (server_id) DO UPDATE SET
       cpu_usage = excluded.cpu_usage,
       ram_usage = excluded.ram_usage,
@@ -161,6 +172,7 @@ export function createIngestHandler(db: DB): express.RequestHandler {
       apps_running = excluded.apps_running,
       container_list = excluded.container_list,
       containers = excluded.containers,
+      ips = excluded.ips,
       last_updated = excluded.last_updated
   `);
   const insertMetric = db.prepare('INSERT INTO metrics (server_id, ts, cpu, ram, disk) VALUES (?, ?, ?, ?, ?)');
@@ -199,6 +211,7 @@ export function createIngestHandler(db: DB): express.RequestHandler {
       appsRunning,
       containerList: JSON.stringify(containers.map((c) => c.name)),
       containers: JSON.stringify(containers),
+      ips: JSON.stringify(toIps(body.ips)),
       now,
     });
 

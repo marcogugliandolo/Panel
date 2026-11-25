@@ -187,7 +187,10 @@ export function buildAlerts(servers: ServerView[], monitors: Monitor[]): PanelAl
         id: `monitor:${monitor.id}:${monitor.status}`,
         severity: monitor.status === 'down' ? 'error' : 'warning',
         title: monitor.status === 'down' ? 'Web caída' : 'Fallo puntual en una web',
-        message: `${monitor.name}: ${monitor.lastCheck?.error ?? 'no responde'}.`,
+        message:
+          monitor.status === 'down' && monitor.diagnosis && !monitor.diagnosis.ok
+            ? `${monitor.name}: ${monitor.diagnosis.title.toLowerCase()}. ${monitor.diagnosis.summary}`
+            : `${monitor.name}: ${monitor.lastCheck?.error ?? 'no responde'}.`,
         target: { kind: 'monitor', id: monitor.id },
       });
     }

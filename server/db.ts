@@ -51,6 +51,7 @@ function migrate(db: DB) {
   addColumn(db, 'server_stats', 'uptime_seconds', 'INTEGER');
   addColumn(db, 'server_stats', 'hostname', 'TEXT');
   addColumn(db, 'server_stats', 'containers', 'TEXT');
+  addColumn(db, 'server_stats', 'ips', 'TEXT');
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS metrics (

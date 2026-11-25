@@ -93,6 +93,39 @@ export interface TelegramChat {
   type: string;
 }
 
+export interface NpmInstance {
+  id: number;
+  name: string;
+  url: string;
+  email: string;
+  serverId: string | null;
+  autoImport: boolean;
+  hostsCount: number | null;
+  syncedAt: number | null;
+  lastError: string | null;
+}
+export interface NpmInstanceInput {
+  name: string;
+  url: string;
+  email: string;
+  password: string;
+  serverId: string | null;
+  autoImport: boolean;
+}
+export interface NpmHost {
+  id: number;
+  domains: string[];
+  forwardScheme: string;
+  forwardHost: string;
+  forwardPort: number;
+  enabled: boolean;
+  ssl: boolean;
+  online: boolean;
+  error: string | null;
+  watched: string[];
+  importable: string[];
+}
+
 export interface TwoFactorStatus {
   enabled: boolean;
   enabledAt: number | null;
@@ -158,6 +191,14 @@ export const api = {
     request<Monitor>(`/monitors/${id}`, { method: 'PUT', body: input }),
   deleteMonitor: (id: number) => request<{ success: boolean }>(`/monitors/${id}`, { method: 'DELETE' }),
   checkMonitor: (id: number) => request<Monitor>(`/monitors/${id}/check`, { method: 'POST' }),
+  diagnoseMonitor: (id: number) => request<Monitor>(`/monitors/${id}/diagnose`, { method: 'POST' }),
+
+  npmInstances: () => request<NpmInstance[]>('/npm'),
+  npmAdd: (input: NpmInstanceInput) => request<NpmInstance>('/npm', { method: 'POST', body: input }),
+  npmUpdate: (id: number, input: Partial<NpmInstanceInput>) => request<NpmInstance>(`/npm/${id}`, { method: 'PUT', body: input }),
+  npmRemove: (id: number) => request<{ success: boolean }>(`/npm/${id}`, { method: 'DELETE' }),
+  npmHosts: (id: number, refresh = false) => request<NpmHost[]>(`/npm/${id}/hosts${refresh ? '?refresh=1' : ''}`),
+  npmImport: (id: number, domains: string[]) => request<{ added: string[] }>(`/npm/${id}/import`, { method: 'POST', body: { domains } }),
   monitorHistory: (id: number, range: HistoryRange) =>
     request<MonitorHistory & { bucketMs: number }>(`/monitors/${id}/history?range=${range}`),
 };

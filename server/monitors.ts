@@ -2,6 +2,7 @@ import express from 'express';
 import net from 'node:net';
 import tls from 'node:tls';
 import type {
+  Diagnosis,
   HistoryRange,
   Monitor,
   MonitorCheck,
@@ -32,6 +33,7 @@ interface MonitorRow {
   cert_issuer: string | null;
   cert_error: string | null;
   cert_checked_at: number | null;
+  diagnosis: string | null;
 }
 
 interface CheckRow {
@@ -137,6 +139,13 @@ const DEFAULT_WEBS: [string, string][] = [
 ];
 
 export function createMonitorService(db: DB) {
+  for (const [column, type] of [['diagnosis', 'TEXT']] as const) {
+    const has = (db.prepare('PRAGMA table_info(monitors)').all() as { name: string }[]).some((c) => c.name === column);
+    if (!has) db.exec(`ALTER TABLE monitors ADD COLUMN ${column} ${type}`);
+  }
+  /** Quien sabe seguir la ruta de una web (se conecta al arrancar, para no depender de NPM aquí). */
+  let diagnoser: ((monitor: Monitor) => Promise<Diagnosis>) | null = null;
+  const diagnosing = new Set<number>();
   const running = new Set<number>();
   const lastRun = new Map<number, number>();
 
@@ -179,6 +188,7 @@ export function createMonitorService(db: DB) {
     // El monitor puede haberse borrado mientras se comprobaba.
     const stillExists = db.prepare('SELECT 1 FROM monitors WHERE id = ?').get(monitor.id);
     if (stillExists) insertCheck.run(monitor.id, ts, ok ? 1 : 0, statusCode, latency, error);
+    if (stillExists) afterCheck(monitor.id, ok);
     // Primer fallo después de ir bien: se repite enseguida para confirmar la caída sin esperar al intervalo entero.
     if (ok) retrySoon.delete(monitor.id);
     else {
@@ -191,6 +201,38 @@ export function createMonitorService(db: DB) {
     if (stillExists && url.protocol === 'https:' && ts - (monitor.cert_checked_at ?? 0) > CERT_REFRESH_MS) {
       const cert = await checkCertificate(url);
       updateCert.run(cert.expiresAt, cert.issuer, cert.error, Date.now(), monitor.id);
+    }
+  }
+
+  /** Tras cada comprobación: si la web está caída se busca dónde falla; si vuelve, se olvida el diagnóstico de la caída. */
+  function afterCheck(id: number, ok: boolean) {
+    const row = getRow(id);
+    if (!row) return;
+    const previous = parseDiagnosis(row.diagnosis);
+    if (ok) {
+      if (previous && !previous.ok) db.prepare('UPDATE monitors SET diagnosis = NULL WHERE id = ?').run(id);
+      return;
+    }
+    const recent = db.prepare('SELECT ok FROM monitor_checks WHERE monitor_id = ? ORDER BY ts DESC LIMIT 2').all(id) as { ok: number }[];
+    const down = recent.length > 0 && recent.every((c) => !c.ok);
+    // Se repite cada pocos minutos mientras siga caída, por si cambia el motivo.
+    if (down && (!previous || previous.ok || Date.now() - previous.at > 3 * 60_000)) void diagnose(id);
+  }
+
+  async function diagnose(id: number): Promise<Diagnosis | null> {
+    if (!diagnoser || diagnosing.has(id)) return null;
+    const row = getRow(id);
+    if (!row) return null;
+    diagnosing.add(id);
+    try {
+      const result = await diagnoser(toMonitor(row));
+      if (getRow(id)) db.prepare('UPDATE monitors SET diagnosis = ? WHERE id = ?').run(JSON.stringify(result), id);
+      return result;
+    } catch (error) {
+      console.error(`[monitor] No se pudo diagnosticar ${row.url}:`, error);
+      return null;
+    } finally {
+      diagnosing.delete(id);
     }
   }
 
@@ -231,6 +273,15 @@ export function createMonitorService(db: DB) {
     // Un fallo aislado se marca como aviso; dos seguidos, como caída.
     if (checks.length === 1 || !checks[1].ok) return 'down';
     return 'warning';
+  }
+
+  function parseDiagnosis(text: string | null): Diagnosis | null {
+    if (!text) return null;
+    try {
+      return JSON.parse(text) as Diagnosis;
+    } catch {
+      return null;
+    }
   }
 
   const toCheck = (row: CheckRow): MonitorCheck => ({
@@ -281,6 +332,7 @@ export function createMonitorService(db: DB) {
             checkedAt: row.cert_checked_at,
           }
         : null,
+      diagnosis: parseDiagnosis(row.diagnosis),
     };
   }
 
@@ -369,6 +421,23 @@ export function createMonitorService(db: DB) {
     res.json(toMonitor(getRow(row.id)!));
   });
 
+  /** Sigue ahora mismo la ruta de la web (DNS → servidor → certificado → NPM → contenedor → aplicación). */
+  router.post('/:id/diagnose', async (req, res) => {
+    const row = getRow(Number(req.params.id));
+    if (!row) {
+      res.status(404).json({ error: 'Monitor no encontrado' });
+      return;
+    }
+    if (!diagnoser) {
+      res.status(503).json({ error: 'El diagnóstico aún no está listo' });
+      return;
+    }
+    // Si ya se está diagnosticando, se espera a ese resultado.
+    while (diagnosing.has(row.id)) await new Promise((r) => setTimeout(r, 200));
+    await diagnose(row.id);
+    res.json(toMonitor(getRow(row.id)!));
+  });
+
   router.get('/:id/history', (req, res) => {
     const id = Number(req.params.id);
     const range = (req.query.range as HistoryRange) in HISTORY_RANGES ? (req.query.range as HistoryRange) : '24h';
@@ -409,6 +478,22 @@ export function createMonitorService(db: DB) {
 
   return {
     router,
+    setDiagnoser(fn: (monitor: Monitor) => Promise<Diagnosis>) {
+      diagnoser = fn;
+    },
+    /** Empieza a vigilar una web (desde Nginx Proxy Manager). Devuelve su id, o null si ya se vigilaba. */
+    add(name: string, url: string): number | null {
+      const exists = db.prepare('SELECT 1 FROM monitors WHERE url = ?').get(url);
+      if (exists) return null;
+      const id = Number(
+        db
+          .prepare('INSERT INTO monitors (name, url, interval_sec, timeout_ms, keyword, enabled, created_at) VALUES (?, ?, 60, 10000, NULL, 1, ?)')
+          .run(name, url, Date.now()).lastInsertRowid,
+      );
+      const row = getRow(id);
+      if (row) schedule(row, true);
+      return id;
+    },
     /** Estado actual de todas las webs (para el aviso por Telegram). */
     list(): Monitor[] {
       const rows = db.prepare('SELECT * FROM monitors ORDER BY name COLLATE NOCASE').all() as MonitorRow[];
