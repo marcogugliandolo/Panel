@@ -125,7 +125,13 @@ async function pool<T>(items: T[], size: number, fn: (item: T) => Promise<void>)
   );
 }
 
-export function createDiscovery(db: DB, monitors: { list(): { url: string }[]; add(name: string, url: string): number | null }, npm: NpmService) {
+export function createDiscovery(
+  db: DB,
+  monitors: { list(): { url: string }[]; add(name: string, url: string): number | null },
+  npm: NpmService,
+  /** Con «solo las webs de NPM» no se buscan webs en los certificados. */
+  opts: { npmOnly(): boolean } = { npmOnly: () => false },
+) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS web_candidates (
@@ -190,7 +196,7 @@ export function createDiscovery(db: DB, monitors: { list(): { url: string }[]; a
       const found = new Map<string, { source: Candidate['source']; certAt: number | null }>();
       const sources = new Set<string>();
       const failures: string[] = [];
-      for (const domain of domains()) {
+      for (const domain of opts.npmOnly() ? [] : domains()) {
         try {
           const { names, source } = await namesFor(domain);
           sources.add(source);
@@ -233,10 +239,12 @@ export function createDiscovery(db: DB, monitors: { list(): { url: string }[]; a
 
   function state() {
     const watched = watchedHosts();
+    const npmOnly = opts.npmOnly();
     const rows = (db.prepare('SELECT * FROM web_candidates WHERE dismissed = 0 ORDER BY responds DESC, resolves DESC, host').all() as CandidateRow[]).filter(
-      (r) => !watched.has(r.host),
+      (r) => !watched.has(r.host) && (!npmOnly || r.source === 'npm'),
     );
     return {
+      npmOnly,
       running,
       lastRun: Number(getSetting('discovery_last_run')) || null,
       lastError,

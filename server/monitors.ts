@@ -415,12 +415,15 @@ export function createMonitorService(db: DB) {
     res.json(toMonitor(getRow(row.id)!));
   });
 
-  router.delete('/:id', (req, res) => {
-    const id = Number(req.params.id);
+  function remove(id: number) {
     db.prepare('DELETE FROM monitor_checks WHERE monitor_id = ?').run(id);
     db.prepare('DELETE FROM monitors WHERE id = ?').run(id);
     webHistory.forgetMonitor(id);
     lastRun.delete(id);
+  }
+
+  router.delete('/:id', (req, res) => {
+    remove(Number(req.params.id));
     res.json({ success: true });
   });
 
@@ -561,6 +564,8 @@ export function createMonitorService(db: DB) {
       if (row) schedule(row, true);
       return id;
     },
+    /** Deja de vigilar una web y borra su historial. */
+    remove,
     /** Estado actual de todas las webs (para el aviso por Telegram). */
     list(): Monitor[] {
       const rows = db.prepare('SELECT * FROM monitors ORDER BY name COLLATE NOCASE').all() as MonitorRow[];

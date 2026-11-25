@@ -508,6 +508,14 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
   });
 
   /** Dominios activos de cada NPM (lo último que se supo), para reconocer su servidor por la IP. */
+  /** ¿Está este dominio en algún NPM (activo o no)? null si aún no se sabe nada de ningún NPM. */
+  function inNpm(hostname: string): boolean | null {
+    const all = [...rows().flatMap((r) => cachedHosts(r)), ...detectedServers().flatMap((d) => d.hosts)];
+    if (!all.length) return null;
+    const h = hostname.toLowerCase();
+    return all.some((x) => x.domains.some((d) => domainMatches(d, h)));
+  }
+
   function domainsByInstance() {
     return [
       ...rows().map((row) => ({ instance: info(row), domains: cachedHosts(row).filter((h) => h.enabled).flatMap((h) => h.domains).filter(importable) })),
@@ -519,6 +527,7 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
     router,
     findHost,
     findHosts,
+    inNpm,
     domainsByInstance,
     instances: () => rows().map(info),
     start() {

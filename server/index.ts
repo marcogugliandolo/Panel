@@ -10,6 +10,7 @@ import { createNotifier } from './notifier';
 import { createNpmService } from './npm';
 import { createDiagnoser } from './diagnose';
 import { createDiscovery } from './discovery';
+import { createWebScope } from './webScope';
 import { createLayoutRouter } from './routes/layout';
 import { createPortainerRouter } from './routes/portainer';
 import { createIngestHandler, createStatsRouter } from './routes/stats';
@@ -39,7 +40,8 @@ async function main() {
   const monitors = createMonitorService(db);
   const npm = createNpmService(db, monitors);
   monitors.setDiagnoser(createDiagnoser(db, npm));
-  const discovery = createDiscovery(db, monitors, npm);
+  const webScope = createWebScope(db, { monitors, npm });
+  const discovery = createDiscovery(db, monitors, npm, { npmOnly: webScope.npmOnly });
   const notifier = createNotifier(db, monitors);
 
   // Rutas públicas
@@ -58,6 +60,7 @@ async function main() {
   app.use('/api/notify', notifier.router);
   app.use('/api/npm', npm.router);
   app.use('/api/discovery', discovery.router);
+  app.use('/api/webs/scope', webScope.router);
   app.use('/api/monitors', monitors.router);
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'Ruta no encontrada' });
@@ -98,6 +101,7 @@ async function main() {
   notifier.start();
   npm.start();
   discovery.start();
+  webScope.start();
 
   if (!config.statsToken) {
     console.warn('[stats] STATS_TOKEN no está definido: se aceptan métricas de cualquiera. Configúralo cuando actualices los scripts.');

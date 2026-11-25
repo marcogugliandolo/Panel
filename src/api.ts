@@ -144,6 +144,8 @@ export interface DiscoveryCandidate {
   checkedAt: number;
 }
 export interface DiscoveryState {
+  /** Con «solo las webs de NPM» no se buscan webs en los certificados. */
+  npmOnly?: boolean;
   running: boolean;
   lastRun: number | null;
   lastError: string | null;
@@ -151,6 +153,16 @@ export interface DiscoveryState {
   domains: string[];
   extraDomains: string[];
   candidates: DiscoveryCandidate[];
+}
+
+/** «Solo las webs de Nginx Proxy Manager». */
+export interface WebScope {
+  npmOnly: boolean;
+  /** false mientras no se sepa nada de ningún NPM (no se quita nada). */
+  ready: boolean;
+  /** Webs vigiladas que no están en ningún NPM. */
+  outside: { id: number; name: string; url: string }[];
+  lastPruned: { at: number; names: string[] } | null;
 }
 
 export interface TwoFactorStatus {
@@ -233,6 +245,9 @@ export const api = {
   npmDetectedAuto: (serverId: string, autoImport: boolean) =>
     request<NpmDetected>(`/npm/detected/${enc(serverId)}`, { method: 'PUT', body: { autoImport } }),
   webBars: () => request<WebBars>('/monitors/bars'),
+  webScope: () => request<WebScope>('/webs/scope'),
+  webScopeSet: (npmOnly: boolean) => request<WebScope>('/webs/scope', { method: 'PUT', body: { npmOnly } }),
+  webScopePrune: () => request<WebScope & { removed: string[] }>('/webs/scope/prune', { method: 'POST' }),
   discovery: () => request<DiscoveryState>('/discovery'),
   discoveryRun: () => request<DiscoveryState>('/discovery/run', { method: 'POST' }),
   discoveryWatch: (hosts: string[]) => request<DiscoveryState & { added: string[] }>('/discovery/watch', { method: 'POST', body: { hosts } }),

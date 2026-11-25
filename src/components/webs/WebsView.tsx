@@ -1,9 +1,9 @@
-import { ChevronLeft, ExternalLink, Play, RefreshCw, Search, Trash2, Waypoints } from 'lucide-react';
+import { ChevronLeft, ExternalLink, Filter, Play, RefreshCw, Search, Trash2, Waypoints, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HistoryRange, Monitor, MonitorHistoryPoint, WebIncident, WebTrafficPoint } from '../../../shared/types';
 import { api, type DiscoveryState } from '../../api';
 import { formatDateTime, formatMs, formatNumber, formatPercent, formatTime, timeAgo } from '../../lib/format';
-import { useMediaQuery, usePolling, useWidth } from '../../lib/hooks';
+import { useMediaQuery, usePolling, useStoredState, useWidth } from '../../lib/hooks';
 import { MONITOR_META } from '../../lib/status';
 import { cn } from '../../lib/utils';
 import { NpmDialog } from '../NpmDialog';
@@ -82,6 +82,55 @@ export function WebsView({
     window.scrollTo?.({ top: 0 });
   };
   const notWatched = (discovery.data?.candidates ?? []).filter((c) => c.responds).length;
+  // «Solo las webs de Nginx Proxy Manager»
+  const scope = usePolling(() => api.webScope(), 60_000);
+  const confirm = useConfirm();
+  const toast = useToast();
+  const [seenPruned, setSeenPruned] = useStoredState<number>('panel:webs-quitadas-vistas', 0);
+  const npmOnly = scope.data?.npmOnly ?? true;
+  const outside = scope.data?.ready ? scope.data.outside : [];
+  const lastPruned = scope.data?.lastPruned && scope.data.lastPruned.at > seenPruned && now - scope.data.lastPruned.at < 7 * 86_400_000 ? scope.data.lastPruned : null;
+  const listNames = (names: string[]) => (
+    <ul className="mt-2 max-h-48 space-y-0.5 overflow-y-auto font-mono text-[12px] text-ink-2">
+      {names.map((n) => (
+        <li key={n}>{n}</li>
+      ))}
+    </ul>
+  );
+  async function setNpmOnly(on: boolean) {
+    if (on && outside.length) {
+      const ok = await confirm({
+        title: 'Solo las webs de Nginx Proxy Manager',
+        message: (
+          <div>
+            <p>
+              Se dejan de vigilar {outside.length === 1 ? 'esta web, que no está' : `estas ${outside.length} webs, que no están`} en ningún NPM (se borra su
+              historial). A partir de ahora, las que borres de NPM también se quitarán solas.
+            </p>
+            {listNames(outside.map((m) => m.name))}
+          </div>
+        ),
+        confirmLabel: outside.length === 1 ? 'Quitar 1 web' : `Quitar ${outside.length} webs`,
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    const st = await api.webScopeSet(on);
+    scope.setData(st);
+    if (on && outside.length) {
+      setSeenPruned(st.lastPruned?.at ?? Date.now());
+      toast(outside.length === 1 ? 'Quitada 1 web que no está en NPM' : `Quitadas ${outside.length} webs que no están en NPM`);
+    }
+    await onChange();
+    void bars.refresh();
+    void discovery.refresh();
+  }
+  // Si el panel ha quitado webs (porque se borraron de NPM), la lista se actualiza.
+  const prunedAt = scope.data?.lastPruned?.at ?? 0;
+  useEffect(() => {
+    if (prunedAt) void onChange();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prunedAt]);
   const sorted = useMemo(
     () => [...(monitors ?? [])].sort((a, b) => Number(b.status === 'down') - Number(a.status === 'down') || a.name.localeCompare(b.name)),
     [monitors],
@@ -113,7 +162,37 @@ export function WebsView({
               {down > 0 && <span className="text-bad">{down} caídas</span>}
             </span>
           </div>
-          {notWatched > 0 ? (
+          {lastPruned && (
+            <div className="flex items-start gap-2.5 rounded-[12px] border border-line bg-surface px-3 py-2.5">
+              <Filter size={14} className="mt-0.5 shrink-0 text-ink-3" aria-hidden />
+              <p className="min-w-0 flex-1 text-[12px] text-ink-2">
+                <span className="font-medium text-ink">
+                  {lastPruned.names.length === 1 ? 'Quitada 1 web que no está en NPM' : `Quitadas ${lastPruned.names.length} webs que no están en NPM`}
+                </span>{' '}
+                <span className="text-ink-3">· {timeAgo(lastPruned.at, now)}</span>
+                <span className="mt-0.5 block break-words text-ink-3">{lastPruned.names.join(', ')}</span>
+              </p>
+              <button type="button" aria-label="Cerrar aviso" onClick={() => setSeenPruned(lastPruned.at)} className="-m-1 rounded p-1 text-ink-3 hover:bg-white/5 hover:text-ink">
+                <X size={13} aria-hidden />
+              </button>
+            </div>
+          )}
+          {!npmOnly && outside.length > 0 && (
+            <button
+              type="button"
+              onClick={() => void setNpmOnly(true)}
+              className="flex w-full items-center gap-2.5 rounded-[12px] border border-warn/30 bg-warn/[0.06] px-3 py-2.5 text-left transition-colors hover:bg-warn/[0.1]"
+            >
+              <Filter size={15} className="shrink-0 text-warn" aria-hidden />
+              <span className="min-w-0 flex-1">
+                <span className="block text-[13px] font-medium text-ink">
+                  {outside.length === 1 ? '1 web no está en NPM' : `${outside.length} webs no están en NPM`}
+                </span>
+                <span className="block text-[11.5px] text-ink-3">Quitarlas y vigilar solo las de Nginx Proxy Manager</span>
+              </span>
+            </button>
+          )}
+          {npmOnly ? null : notWatched > 0 ? (
             <button
               type="button"
               onClick={() => setFindOpen(true)}
@@ -181,6 +260,26 @@ export function WebsView({
             <Waypoints size={14} className="shrink-0 text-ink-3" aria-hidden />
             Nginx Proxy Manager
           </button>
+          {scope.data && (
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-[10px] px-1 py-1 text-[12.5px]">
+              <input
+                type="checkbox"
+                checked={npmOnly}
+                onChange={(e) => void setNpmOnly(e.target.checked)}
+                className="mt-0.5 size-4 shrink-0 accent-[var(--color-accent)]"
+              />
+              <span>
+                <span className="block text-ink-2">Solo las webs de Nginx Proxy Manager</span>
+                <span className="block text-[11.5px] text-ink-3">
+                  {npmOnly
+                    ? scope.data.ready
+                      ? 'Las que borres de NPM dejan de vigilarse solas.'
+                      : 'Aún no llegan los datos de NPM: no se quita nada hasta entonces.'
+                    : 'Desactivado: puedes vigilar webs que no estén en NPM y buscarlas en tus certificados.'}
+                </span>
+              </span>
+            </label>
+          )}
           <p className="text-[11.5px] text-ink-3">Barras: últimas 24 horas, una por hora.</p>
         </aside>
 
