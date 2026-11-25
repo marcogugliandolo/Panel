@@ -303,6 +303,34 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
    * ¿Qué NPM sirve este dominio y a dónde lo manda? Usa lo guardado y, si es viejo, lo pide de nuevo
    * (si NPM no contesta, se queda con lo último que se supo).
    */
+  /**
+   * Todos los NPM que tienen ese dominio (puede haber dos: el de fuera que lo manda a casa y el de casa
+   * que lo manda al contenedor). Con todos sus proxy hosts, para deducir la IP pública de su máquina.
+   */
+  async function findHosts(hostname: string, maxAgeMs = 60_000) {
+    const out: { instance: ReturnType<typeof info>; host: NpmProxyHost; siblings: string[]; all: NpmProxyHost[] }[] = [];
+    for (const row of rows()) {
+      let hosts = cachedHosts(row);
+      if (!row.synced_at || Date.now() - row.synced_at > maxAgeMs) {
+        try {
+          hosts = await sync(row);
+        } catch {
+          /* se usa lo guardado */
+        }
+      }
+      const host = hosts.find((h) => h.domains.some((d) => domainMatches(d, hostname)));
+      if (host) out.push({ instance: info(getRow(row.id) ?? row), host, siblings: hosts.filter((h) => h !== host && h.enabled).flatMap((h) => h.domains), all: hosts });
+    }
+    for (const d of detectedServers()) {
+      const host = d.hosts.find((h) => h.domains.some((x) => domainMatches(x, hostname)));
+      // El mismo NPM conectado por API y detectado por el script cuenta una vez.
+      if (host && !out.some((o) => o.instance.serverId && o.instance.serverId === d.serverId)) {
+        out.push({ instance: detectedInfo(d), host, siblings: d.hosts.filter((h) => h !== host).flatMap((h) => h.domains), all: d.hosts });
+      }
+    }
+    return out;
+  }
+
   async function findHost(hostname: string, maxAgeMs = 60_000) {
     for (const row of rows()) {
       let hosts = cachedHosts(row);
@@ -490,6 +518,7 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
   return {
     router,
     findHost,
+    findHosts,
     domainsByInstance,
     instances: () => rows().map(info),
     start() {

@@ -111,6 +111,13 @@ function toIps(value: unknown): string[] {
 }
 
 /** Normaliza la lista de contenedores: admite nombres sueltos (formato antiguo) u objetos con estado. */
+/** Lista de palabras («app web» o ["app","web"]) validada; vacía no se guarda. */
+function words<K extends string>(key: K, value: unknown, valid: RegExp): Partial<Record<K, string[]>> {
+  const raw = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/\s+/) : [];
+  const list = [...new Set(raw.map((w) => String(w).trim()).filter((w) => valid.test(w)))].slice(0, 20);
+  return list.length ? ({ [key]: list } as Partial<Record<K, string[]>>) : {};
+}
+
 function toContainers(value: unknown): ContainerInfo[] | null {
   if (!Array.isArray(value)) return null;
   const result: ContainerInfo[] = [];
@@ -130,6 +137,8 @@ function toContainers(value: unknown): ContainerInfo[] | null {
         status,
         image: cleanText(record.image ?? record.Image, 200),
         ports: cleanText(record.ports ?? record.Ports, 400),
+        ...words('aliases', record.aliases, /^[a-z0-9][a-z0-9_.-]{0,127}$/i),
+        ...words('ips', record.ips, /^\d{1,3}(\.\d{1,3}){3}$/),
       });
     }
   }
@@ -219,6 +228,7 @@ export function createIngestHandler(db: DB, onTraffic?: (samples: TrafficSample[
       last_updated = excluded.last_updated
   `);
   const insertMetric = db.prepare('INSERT INTO metrics (server_id, ts, cpu, ram, disk) VALUES (?, ?, ?, ?, ?)');
+  const rememberIps = createIpMemory(db);
 
   return (req, res) => {
     const serverId = req.params.id;
@@ -259,6 +269,8 @@ export function createIngestHandler(db: DB, onTraffic?: (samples: TrafficSample[
       now,
     });
 
+    rememberIps(serverId, containers, now);
+
     if (now - (lastMetricAt.get(serverId) ?? 0) >= METRIC_INTERVAL_MS) {
       insertMetric.run(serverId, now, cpu, ram, disk);
       lastMetricAt.set(serverId, now);
@@ -267,6 +279,50 @@ export function createIngestHandler(db: DB, onTraffic?: (samples: TrafficSample[
     if (onTraffic && Array.isArray(body.npmTraffic)) onTraffic(toTraffic(body.npmTraffic));
     res.json({ success: true });
   };
+}
+
+/**
+ * Docker le quita la IP a un contenedor al pararlo. Si Nginx Proxy Manager apunta a esa IP
+ * (172.21.0.5:3000), el panel tiene que seguir sabiendo de quién era justo cuando la web se cae:
+ * se guarda la última IP de cada contenedor en marcha.
+ */
+function ensureIpTable(db: DB) {
+  db.exec(`CREATE TABLE IF NOT EXISTS container_ips (
+    server_id TEXT NOT NULL, ip TEXT NOT NULL, container TEXT NOT NULL, seen_at INTEGER NOT NULL,
+    PRIMARY KEY (server_id, ip))`);
+}
+function createIpMemory(db: DB) {
+  ensureIpTable(db);
+  const put = db.prepare(
+    `INSERT INTO container_ips (server_id, ip, container, seen_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(server_id, ip) DO UPDATE SET container = excluded.container, seen_at = excluded.seen_at`,
+  );
+  const prune = db.prepare('DELETE FROM container_ips WHERE seen_at < ?');
+  const written = new Map<string, { container: string; at: number }>();
+  let prunedAt = 0;
+  return (serverId: string, containers: ContainerInfo[], now: number) => {
+    for (const c of containers) {
+      if (c.state !== 'running') continue;
+      for (const ip of c.ips ?? []) {
+        const key = `${serverId}|${ip}`;
+        const last = written.get(key);
+        // Se escribe al cambiar y, si no, una vez al día (para saber que sigue siendo suya).
+        if (last && last.container === c.name && now - last.at < 86_400_000) continue;
+        put.run(serverId, ip, c.name, now);
+        written.set(key, { container: c.name, at: now });
+      }
+    }
+    if (now - prunedAt > 86_400_000) {
+      prune.run(now - 60 * 86_400_000);
+      prunedAt = now;
+    }
+  };
+}
+/** El contenedor que tuvo esa IP la última vez que se vio en marcha. */
+export function containerForIp(db: DB, serverId: string, ip: string): string | null {
+  ensureIpTable(db);
+  const row = db.prepare('SELECT container FROM container_ips WHERE server_id = ? AND ip = ?').get(serverId, ip) as { container: string } | undefined;
+  return row?.container ?? null;
 }
 
 /** Métricas de todos los servidores tal como las ve la interfaz (también las usa el aviso por Telegram). */

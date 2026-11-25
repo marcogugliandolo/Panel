@@ -43,6 +43,45 @@ json_str() {
   printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
+# Nombres con los que se llega a cada contenedor dentro de Docker (el servicio del stack y los alias
+# de red) y sus IPs internas. Así el panel sabe qué contenedor hay detrás de cada web de Nginx Proxy
+# Manager aunque NPM apunte a «app:3000» o a «172.18.0.5:3000» en vez de al nombre del contenedor.
+declare -A RED_ALIAS RED_IPS RED_PORTS
+leer_red_docker() {
+  local ids cname svc nets binds part w alias ips ports i
+  local -a parts
+  ids=$(docker ps -aq 2> /dev/null) || return 0
+  [ -z "$ids" ] && return 0
+  # Por cada red: «IP;alias alias ;». Un contenedor parado no tiene IP (Docker 29 escribe «invalid IP»).
+  while IFS='|' read -r cname svc nets binds; do
+    cname=${cname#/}
+    [ -z "$cname" ] && continue
+    alias="" ips="" ports=""
+    case "$svc" in '' | '<no value>') ;; *) alias="$svc" ;; esac
+    IFS=';' read -ra parts <<< "$nets"
+    i=0
+    for part in "${parts[@]}"; do
+      if [ $((i % 2)) -eq 0 ]; then
+        [[ $part =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && ips="${ips:+$ips }$part"
+      else
+        for w in $part; do
+          # El id corto y el propio nombre no aportan nada
+          [[ $w =~ ^[0-9a-f]{12}$ ]] || [ "$w" = "$cname" ] || [ "$w" = '<no value>' ] && continue
+          case " $alias " in *" $w "*) ;; *) alias="${alias:+$alias }$w" ;; esac
+        done
+      fi
+      i=$((i + 1))
+    done
+    # Puertos publicados según su configuración: `docker ps` no los enseña si el contenedor está parado.
+    for w in $binds; do
+      case "$w" in [0-9]*'->'*) ports="${ports:+$ports, }0.0.0.0:$w" ;; esac
+    done
+    RED_ALIAS[$cname]=$alias
+    RED_IPS[$cname]=$ips
+    RED_PORTS[$cname]=$ports
+  done < <(docker inspect -f '{{.Name}}|{{index .Config.Labels "com.docker.compose.service"}}|{{range $n, $c := .NetworkSettings.Networks}}{{$c.IPAddress}};{{range $c.Aliases}}{{.}} {{end}};{{end}}|{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}{{.HostPort}}->{{$p}} {{end}}{{end}}' $ids 2> /dev/null)
+}
+
 # Nginx Proxy Manager de este servidor (si lo hay): qué dominio manda a qué contenedor y puerto.
 # Se lee de sus archivos de configuración (/data/nginx/proxy_host/*.conf), sin usuario ni contraseña.
 # Un archivo .conf.err es un host que NPM no ha podido cargar (error de configuración).
@@ -178,7 +217,10 @@ enviar() {
   RUNNING=0
   TOTAL=0
   add_item() { # nombre estado texto_estado imagen puertos
-    CONTAINERS="${CONTAINERS:+$CONTAINERS,}{\"name\":\"$(json_str "$1")\",\"state\":\"$(json_str "$2")\",\"status\":\"$(json_str "$3")\",\"image\":\"$(json_str "$4")\",\"ports\":\"$(json_str "${5:-}")\"}"
+    local extra="" alias="${RED_ALIAS[$1]:-}" ips="${RED_IPS[$1]:-}"
+    [ -n "$alias" ] && extra="${extra},\"aliases\":\"$(json_str "$alias")\""
+    [ -n "$ips" ] && extra="${extra},\"ips\":\"$(json_str "$ips")\""
+    CONTAINERS="${CONTAINERS:+$CONTAINERS,}{\"name\":\"$(json_str "$1")\",\"state\":\"$(json_str "$2")\",\"status\":\"$(json_str "$3")\",\"image\":\"$(json_str "$4")\",\"ports\":\"$(json_str "${5:-}")\"${extra}}"
     TOTAL=$((TOTAL + 1))
     case "$2:$3" in
       running:*) RUNNING=$((RUNNING + 1)) ;;
@@ -186,11 +228,16 @@ enviar() {
     esac
   }
 
+  RED_ALIAS=()
+  RED_IPS=()
+  RED_PORTS=()
   if command -v docker > /dev/null 2>&1; then
+    leer_red_docker
     # Sin {{.State}}, que no existe en Docker antiguos: el panel deduce el estado de "Up 3 hours", "Exited (1)…".
     # Los puertos sirven al panel para saber qué contenedor hay detrás de cada web de Nginx Proxy Manager.
     if LIST=$(docker ps -a --format '{{.Names}}|{{.Status}}|{{.Image}}|{{.Ports}}' 2>/dev/null); then
       while IFS='|' read -r name status image ports; do
+        [ -z "$ports" ] && ports="${RED_PORTS[$name]:-}"
         [ -n "$name" ] && add_item "$name" "" "$status" "$image" "$ports"
       done <<< "$LIST"
     else

@@ -22,7 +22,7 @@ import { exitCode } from '../shared/health';
 import type { DB } from './db';
 import type { NpmProxyHost, NpmService } from './npm';
 import { readLayout } from './routes/layout';
-import { readAllStats } from './routes/stats';
+import { containerForIp, readAllStats } from './routes/stats';
 
 const DNS_TIMEOUT_MS = 4_000;
 const CONNECT_TIMEOUT_MS = 6_000;
@@ -150,25 +150,157 @@ const looksLikeNpmDefault = (p: Probe) => /nginx proxy manager|congratulations!|
 const isNpmServer = (p: Probe) => /openresty/i.test(p.server ?? '');
 
 const PRIVATE_GATEWAY = /^(127\.|localhost$|host\.docker\.internal$|172\.(1[6-9]|2\d|3[01])\.\d+\.1$)/i;
+const PRIVATE_IP = /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)/;
 
-/** Busca el contenedor que hay detrás del destino de NPM (nombre de contenedor o IP:puerto publicado). */
-function findTarget(host: NpmProxyHost, npmServerId: string | null, statsList: ServerStats[]) {
-  const target = host.forwardHost.toLowerCase();
-  const isIp = net.isIP(target) > 0 || target === 'localhost' || target === 'host.docker.internal';
-  let server: ServerStats | undefined;
-  if (isIp) {
-    server = statsList.find((s) => s.ips.includes(target)) ?? (PRIVATE_GATEWAY.test(target) ? statsList.find((s) => s.serverId === npmServerId) : undefined);
-  } else {
-    server = statsList.find((s) => s.serverId === npmServerId);
+/** Un puerto de `docker ps`: «0.0.0.0:3004->3000/tcp», «[::]:3000-3002->3000-3002/tcp» o solo «80/tcp». */
+interface PortMap {
+  host: [number, number] | null;
+  inside: [number, number];
+}
+function parsePorts(text: string | null | undefined): PortMap[] {
+  const out: PortMap[] = [];
+  for (const part of (text ?? '').split(',')) {
+    const m = part.trim().match(/^(?:.*:(\d+)(?:-(\d+))?->)?(\d+)(?:-(\d+))?\/(?:tcp|udp|sctp)$/i);
+    if (!m) continue;
+    const host: [number, number] | null = m[1] ? [Number(m[1]), Number(m[2] ?? m[1])] : null;
+    out.push({ host, inside: [Number(m[3]), Number(m[4] ?? m[3])] });
   }
-  if (!server) return { server: undefined, container: undefined, isIp };
-  const byName = (c: ContainerInfo) => {
-    const n = c.name.toLowerCase();
-    return n === target || n.endsWith(`-${target}-1`) || n.endsWith(`_${target}_1`) || n === `${target}-1` || n.startsWith(`${target}-`);
+  return out;
+}
+const inRange = (port: number, [a, b]: [number, number]) => port >= a && port <= b;
+/** Publica ese puerto en la máquina (lo que hay a la izquierda de «->»). */
+const publishes = (c: ContainerInfo, port: number) => parsePorts(c.ports).some((p) => p.host && inRange(port, p.host));
+/** Escucha en ese puerto por dentro (lo que hay a la derecha de «->», o los puertos expuestos). */
+const listensOn = (c: ContainerInfo, port: number) => parsePorts(c.ports).some((p) => inRange(port, p.inside));
+
+/** Cómo se ha encontrado el contenedor, para explicarlo en la ficha. */
+type FoundBy = 'name' | 'alias' | 'guess' | 'ip' | 'ip-memory' | 'port' | 'self';
+
+/** De varios candidatos, el que escucha en el puerto de destino y, si no, el que está en marcha. */
+function best(list: ContainerInfo[], port: number): ContainerInfo {
+  const score = (c: ContainerInfo) => (listensOn(c, port) ? 2 : 0) + (c.state === 'running' ? 1 : 0);
+  return [...list].sort((a, b) => score(b) - score(a))[0];
+}
+
+/** Lo que se sabe de las IPs alrededor del destino. */
+interface TargetHints {
+  /** IPs públicas por las que se llega al NPM (la de la web y las de sus otras webs). */
+  selfIps?: string[];
+  /** IPs públicas de otras máquinas del panel deducidas de los destinos de NPM (IP → serverId). */
+  publicIps?: Map<string, string>;
+  /** IPs a las que resuelve el destino, si es un nombre de dominio («casa.midominio.com»). */
+  resolved?: string[];
+  /** De quién era una IP interna de Docker la última vez que se vio (un contenedor parado ya no la tiene). */
+  rememberIp?: (serverId: string, ip: string) => string | null;
+}
+
+/** El contenedor de Nginx Proxy Manager en una máquina. */
+const isNpmContainer = (c: ContainerInfo) => /nginx-proxy-manager|npmplus|nginxproxymanager|jc21\/nginx/i.test(`${c.image ?? ''} ${c.name}`);
+
+/**
+ * IPs públicas que no salen en `hostname -I` (en Oracle la IP pública está fuera, por NAT). Si varios
+ * destinos de NPM van a la misma IP pública y en una máquina del panel hay contenedores que publican
+ * esos puertos, esa IP es de esa máquina (esté NPM en ella o en otra).
+ */
+export function learnPublicIps(hosts: NpmProxyHost[], statsList: ServerStats[]): Map<string, string> {
+  const byIp = new Map<string, number[]>();
+  for (const h of hosts) {
+    const ip = h.forwardHost.trim();
+    if (!net.isIPv4(ip) || PRIVATE_IP.test(ip) || statsList.some((s) => s.ips.includes(ip))) continue;
+    byIp.set(ip, [...(byIp.get(ip) ?? []), h.forwardPort]);
+  }
+  const out = new Map<string, string>();
+  for (const [ip, ports] of byIp) {
+    let bestId: string | null = null;
+    let bestHits = 0;
+    for (const s of statsList) {
+      const hits = ports.filter((port) => s.containers.some((c) => publishes(c, port))).length;
+      if (hits > bestHits) [bestId, bestHits] = [s.serverId, hits];
+    }
+    if (bestId && bestHits >= 2 && bestHits / ports.length >= 0.5) out.set(ip, bestId);
+  }
+  return out;
+}
+
+/**
+ * Busca el contenedor que hay detrás del destino de NPM, como lo resolvería el propio NPM:
+ *   · un nombre lo resuelve el DNS de Docker en la máquina de NPM: nombre del contenedor, servicio del
+ *     stack o alias de red (con el puerto de dentro del contenedor);
+ *   · una IP de una red de Docker es la de un contenedor concreto;
+ *   · 127.0.0.1 dentro de NPM es el propio NPM;
+ *   · una IP de una máquina (también su IP pública o la puerta de enlace de Docker) lleva al
+ *     contenedor que publica ese puerto.
+ * Nunca se adivina por el puerto cuando NPM apunta a un nombre: el puerto es el de dentro y puede
+ * coincidir con el que publica otro contenedor (con el 80, el propio NPM).
+ * `external` indica que el destino es otra máquina que el panel no conoce (p. ej. tu casa).
+ */
+export function findTarget(host: NpmProxyHost, npmServerId: string | null, statsList: ServerStats[], hints: TargetHints = {}) {
+  const target = host.forwardHost.trim().toLowerCase().replace(/\.$/, '');
+  const port = host.forwardPort;
+  const npmServer = statsList.find((s) => s.serverId === npmServerId);
+  const ordered = npmServer ? [npmServer, ...statsList.filter((s) => s !== npmServer)] : statsList;
+  const none = { server: undefined as ServerStats | undefined, container: undefined as ContainerInfo | undefined, foundBy: null as FoundBy | null, external: false, ip: null as string | null };
+  const found = (server: ServerStats, list: ContainerInfo[], foundBy: FoundBy, ip: string | null = null) =>
+    list.length ? { ...none, server, container: best(list, port), foundBy, ip } : { ...none, server, ip };
+
+  // Una IP: la de un contenedor en la red de Docker de NPM, o la de una máquina (el que publica ese puerto).
+  const byMachineIp = (ip: string) => {
+    // Las IPs internas de Docker solo existen en la máquina de NPM (en otra pueden repetirse y ser otro).
+    const internal = PRIVATE_IP.test(ip) && !PRIVATE_GATEWAY.test(ip) && !statsList.some((s) => s.ips.includes(ip));
+    for (const s of internal && npmServer ? [npmServer] : ordered) {
+      const live = s.containers.filter((x) => x.ips?.includes(ip));
+      if (live.length) return found(s, live, 'ip', ip);
+      const remembered = hints.rememberIp?.(s.serverId, ip);
+      const stopped = remembered ? s.containers.filter((x) => x.name === remembered && !x.ips?.length) : [];
+      if (stopped.length) return found(s, stopped, 'ip-memory', ip);
+    }
+    const ownerId = hints.publicIps?.get(ip);
+    const server =
+      statsList.find((s) => s.ips.includes(ip)) ??
+      (ownerId ? statsList.find((s) => s.serverId === ownerId) : undefined) ??
+      (PRIVATE_GATEWAY.test(ip) || hints.selfIps?.includes(ip) ? npmServer : undefined);
+    if (!server) return internal && npmServer ? { ...none, server: npmServer, ip } : null;
+    return found(server, server.containers.filter((c) => publishes(c, port)), 'port', ip);
   };
-  const byPort = (c: ContainerInfo) => new RegExp(`[:.]${host.forwardPort}->`).test(c.ports ?? '');
-  const container = isIp ? server.containers.find(byPort) : (server.containers.find(byName) ?? server.containers.find(byPort));
-  return { server, container, isIp };
+
+  // Dentro del contenedor de NPM, 127.0.0.1 es el propio NPM.
+  if (/^127\./.test(target) || target === 'localhost') {
+    if (npmServer) {
+      const self = npmServer.containers.filter(isNpmContainer);
+      if (self.length) return found(npmServer, self, 'self');
+      return found(npmServer, npmServer.containers.filter((c) => publishes(c, port)), 'port');
+    }
+    return none;
+  }
+  if (net.isIP(target) || target === 'host.docker.internal') {
+    return byMachineIp(target === 'host.docker.internal' ? '172.17.0.1' : target) ?? { ...none, external: !PRIVATE_IP.test(target), ip: target };
+  }
+
+  // Un nombre: primero donde está NPM (es quien lo resuelve); si no se sabe dónde está, en todos.
+  for (const s of npmServer ? [npmServer] : statsList) {
+    const lower = (c: ContainerInfo) => c.name.toLowerCase();
+    const exact = s.containers.filter((c) => lower(c) === target);
+    if (exact.length) return found(s, exact, 'name');
+    const alias = s.containers.filter((c) => c.aliases?.some((a) => a.toLowerCase() === target));
+    if (alias.length) return found(s, alias, 'alias');
+    // Sin alias (script antiguo): los nombres que pone Docker Compose o Swarm a partir del servicio.
+    const guess = s.containers.filter((c) => {
+      const n = lower(c);
+      return n.endsWith(`-${target}-1`) || n.endsWith(`_${target}_1`) || n === `${target}-1` || n === `${target}_1` || n.startsWith(`${target}.`);
+    });
+    if (guess.length) return found(s, guess, 'guess');
+  }
+  // El nombre de otra máquina del panel (p. ej. «raspberrypi»).
+  const short = target.split('.')[0];
+  const machine = statsList.find((s) => s.hostname && (s.hostname.toLowerCase() === target || s.hostname.toLowerCase().split('.')[0] === short));
+  if (machine) return found(machine, machine.containers.filter((c) => publishes(c, port)), 'port');
+  // Un dominio («casa.midominio.com»): a dónde apunta.
+  for (const ip of hints.resolved ?? []) {
+    const r = byMachineIp(ip);
+    if (r) return r;
+  }
+  if (target.includes('.')) return { ...none, external: true, ip: hints.resolved?.[0] ?? null };
+  return npmServer ? { ...none, server: npmServer } : none;
 }
 
 const STEP_TITLE: Record<RouteStepId, string> = {
@@ -192,7 +324,30 @@ export function createDiagnoser(db: DB, npm: NpmService) {
       (id && (layoutNodes.find((n) => n.serverId === id)?.title || statsList.find((s) => s.serverId === id)?.hostname)) || id || 'el servidor';
     const endpointOf = (id: string) => layoutNodes.find((n) => n.serverId === id && n.portainerEndpointId)?.portainerEndpointId ?? null;
 
-    const match = await npm.findHost(hostname).catch(() => null);
+    const matches = await npm.findHosts(hostname).catch(() => [] as Awaited<ReturnType<NpmService['findHosts']>>);
+    type Match = (typeof matches)[number];
+    const statsOf = (m: Match) => statsList.find((s) => s.serverId === m.instance.serverId);
+    // Con dos NPM para el mismo dominio (uno fuera que lo manda a casa y otro en casa que lo manda al
+    // contenedor), la visita entra por el que manda a otra máquina y sigue por el otro.
+    let match: Match | null = matches[0] ?? null;
+    let nextHop: Match | null = null;
+    if (matches.length > 1) {
+      const outer = matches.find((m) => findTarget(m.host, m.instance.serverId, statsList).external);
+      if (outer) {
+        match = outer;
+        nextHop = matches.find((m) => m !== outer && m.instance.serverId !== outer.instance.serverId) ?? null;
+      } else if (!net.isIP(hostname)) {
+        // Si no, el NPM de la máquina a la que apunta el DNS de la web.
+        const ips = await resolve4(hostname).catch(() => [] as string[]);
+        const owner = (m: Match) => {
+          const publicIps = learnPublicIps(m.all, statsList);
+          return ips.some((ip) => statsOf(m)?.ips.includes(ip) || publicIps.get(ip) === m.instance.serverId);
+        };
+        match = matches.find(owner) ?? match;
+      }
+    }
+    /** IPs por las que se llega a este NPM desde fuera (la de la web y la de sus otras webs). */
+    let entryIps: string[] = [];
     // Si el dominio no está en ningún NPM, se intenta saber al menos a qué servidor llega (por la IP de las demás webs).
     let guessedServerId: string | null = null;
     let guessedNpm: string | null = null;
@@ -246,6 +401,7 @@ export function createDiagnoser(db: DB, npm: NpmService) {
             if (guessedServerId) break;
           }
         }
+        entryIps = [...new Set([...ips, ...(expected ? [expected] : [])])];
         if (expected && !ips.includes(expected)) {
           add('dns', 'DNS', 'warn', `Apunta a ${ips.join(', ')}, pero tus otras webs de ${match!.instance.name} están en ${expected}. ¿Ha cambiado la IP o falta actualizar el registro en Cloudflare?`);
         } else {
@@ -356,14 +512,68 @@ export function createDiagnoser(db: DB, npm: NpmService) {
     /* 5. Contenedor de destino */
     let containerRunning: ContainerInfo | undefined;
     if (match) {
-      const { server, container } = findTarget(match.host, match.instance.serverId, statsList);
-      const label = container?.name ?? `${match.host.forwardHost}:${match.host.forwardPort}`;
+      // Dónde acaba un salto de NPM (los dominios de destino se resuelven, como haría NPM).
+      const locate = async (m: Match, selfIps: string[]) => {
+        const fwd = m.host.forwardHost.trim().toLowerCase();
+        const resolved = !net.isIP(fwd) && fwd.includes('.') ? await resolve4(fwd).catch(() => [] as string[]) : [];
+        return findTarget(m.host, m.instance.serverId, statsList, {
+          selfIps,
+          publicIps: learnPublicIps(m.all, statsList),
+          resolved,
+          rememberIp: (serverId, ip) => containerForIp(db, serverId, ip),
+        });
+      };
+      const destOf = (m: Match) => `${m.host.forwardHost}:${m.host.forwardPort}`;
+      let hop: Match = match;
+      let found = await locate(match, entryIps);
+      let via = '';
+      if (!found.container && found.external) {
+        // Va a otra máquina: si allí hay otro NPM que el panel conoce con este dominio, se sigue por él.
+        const next = nextHop ?? matches.find((m) => m !== match && m.instance.serverId !== match!.instance.serverId) ?? null;
+        if (next) {
+          const second = await locate(next, found.ip ? [found.ip] : []);
+          if (second.container || second.server) {
+            via = ` Pasa por ${destOf(match)}, donde el Nginx Proxy Manager de ${next.instance.serverId ? serverName(next.instance.serverId) : next.instance.name} lo manda a ${destOf(next)}.`;
+            hop = next;
+            found = second;
+          }
+        }
+      }
+      const { server, container, foundBy } = found;
+      const dest = destOf(hop);
+      const label = container?.name ?? (found.external ? hop.host.forwardHost : dest);
+      // Por qué es este contenedor, cuando NPM no apunta a su nombre tal cual.
+      const why =
+        via ||
+        (!container || foundBy === 'name'
+          ? ''
+          : foundBy === 'alias'
+            ? ` NPM apunta a ${dest}, que es su nombre en la red de Docker.`
+            : foundBy === 'ip'
+              ? ` NPM apunta a ${dest}, su IP en la red de Docker.`
+              : foundBy === 'ip-memory'
+                ? ` NPM apunta a ${dest}: era su IP en la red de Docker (al pararse, Docker se la quita).`
+              : foundBy === 'self'
+                ? ` NPM apunta a ${dest}: es el propio Nginx Proxy Manager.`
+                : foundBy === 'port'
+                  ? ` NPM apunta a ${dest} y es el contenedor que publica ese puerto${found.ip && !server?.ips.includes(found.ip) && !PRIVATE_IP.test(found.ip) ? ` (${found.ip} es la IP pública de ${serverName(server?.serverId)})` : ''}.`
+                  : ` NPM apunta a ${dest} (deducido por el nombre; actualiza el script de métricas para saberlo seguro).`);
       if (container && container.state !== 'running') {
         const code = exitCode(container);
         const where = serverName(server?.serverId);
         const state =
-          container.state === 'exited' ? `parado${code ? ` con error (código ${code})` : ''}` : container.state === 'restarting' ? 'reiniciándose sin parar' : container.state === 'paused' ? 'en pausa' : container.state;
-        add('container', label, 'fail', `${container.name} está ${state} en ${where}${container.status ? ` · ${container.status}` : ''}.`);
+          container.state === 'exited'
+            ? `parado${code ? ` con error (código ${code})` : ''}`
+            : container.state === 'restarting'
+              ? 'reiniciándose sin parar'
+              : container.state === 'paused'
+                ? 'en pausa'
+                : container.state === 'created'
+                  ? 'creado pero sin arrancar'
+                  : container.state === 'dead'
+                    ? 'muerto (Docker no pudo pararlo bien)'
+                    : container.state;
+        add('container', label, 'fail', `${container.name} está ${state} en ${where}${container.status ? ` · ${container.status}` : ''}.${why}`);
         const endpointId = server ? endpointOf(server.serverId) : null;
         if (endpointId) action = { kind: 'start-container', endpointId, container: container.name, serverName: where };
         skipRest(['app']);
@@ -371,19 +581,25 @@ export function createDiagnoser(db: DB, npm: NpmService) {
       }
       if (container) {
         containerRunning = container;
-        add('container', label, 'ok', `En marcha en ${serverName(server?.serverId)}${container.status ? ` · ${container.status}` : ''}.`);
+        add('container', label, 'ok', `En marcha en ${serverName(server?.serverId)}${container.status ? ` · ${container.status}` : ''}.${why}`);
       } else if (server && !server.online) {
-        add('container', label, 'fail', `${serverName(server.serverId)}, donde está ${match.host.forwardHost}, no envía datos desde hace ${minutesAgo(server.lastUpdated)}: está apagado o sin red.`);
+        add('container', label, 'fail', `${serverName(server.serverId)}, donde está ${hop.host.forwardHost}, no envía datos desde hace ${minutesAgo(server.lastUpdated)}: está apagado o sin red.${via}`);
         skipRest(['app']);
         return finish();
       } else {
+        const byAddress = net.isIP(hop.host.forwardHost.trim()) > 0 || found.ip !== null;
+        const old = server && !server.containers.some((c) => c.aliases || c.ips);
         add(
           'container',
           label,
           npmGateway ? 'warn' : 'skip',
-          server
-            ? `No encuentro el contenedor de ${match.host.forwardHost}:${match.host.forwardPort} en ${serverName(server.serverId)}. Si el destino es una IP, actualiza el script de métricas para que envíe los puertos.`
-            : `${match.host.forwardHost} no es de ningún servidor del panel${match.instance.serverId ? '' : ' (indica en qué servidor está este NPM)'}.`,
+          found.external
+            ? `NPM lo manda a ${dest}${found.ip && found.ip !== hop.host.forwardHost ? ` (${found.ip})` : ''}, otra máquina que el panel no ve. Si allí hay otro Nginx Proxy Manager (en casa, por ejemplo), pon el script de métricas en esa máquina y el panel seguirá la ruta hasta el contenedor.`
+            : server
+              ? byAddress
+                ? `NPM lo manda a ${dest}. En ${serverName(server.serverId)} ningún contenedor ${old ? 'publica ese puerto (actualiza allí el script de métricas para que envíe las IPs de cada contenedor)' : 'tiene esa IP ni publica ese puerto: será un servicio de la propia máquina'}.${via}`
+                : `NPM lo manda a ${dest}, pero en ${serverName(server.serverId)} no hay ningún contenedor con ese nombre o alias${old ? ' (actualiza allí el script de métricas para que envíe los nombres de red de cada contenedor)' : ''}.${via}`
+              : `${hop.host.forwardHost} no es de ningún servidor del panel${hop.instance.serverId ? '' : ' (indica en qué servidor está este NPM)'}.`,
         );
       }
     } else {

@@ -18,6 +18,10 @@ export interface ContainerInfo {
   image?: string | null;
   /** Puertos tal como los da Docker («0.0.0.0:3004->3000/tcp, :::3004->3000/tcp»). */
   ports?: string | null;
+  /** Otros nombres con los que se le llega dentro de Docker: servicio del stack y alias de red. */
+  aliases?: string[] | null;
+  /** Sus IPs en las redes de Docker. */
+  ips?: string[] | null;
 }
 
 /** Un proxy host de NPM tal como lo lee el script de métricas en el servidor. */
