@@ -110,6 +110,22 @@ export function WebsView({
     toast(`${w.name} vuelve a vigilarse y no se apartará`);
     await refreshAll();
   }
+  async function forget(w: DormantWeb | null) {
+    const many = w === null;
+    const ok = await confirm({
+      title: many ? `Olvidar ${dormant.length === 1 ? 'la web apartada' : `las ${dormant.length} webs apartadas`}` : `Olvidar ${w.name}`,
+      message: (
+        <div>
+          <p>Deja{many && dormant.length > 1 ? 'n' : ''} de probarse y no vuelve{many && dormant.length > 1 ? 'n' : ''} a la lista aunque responda{many && dormant.length > 1 ? 'n' : ''}. Si la quieres más adelante, impórtala desde Nginx Proxy Manager.</p>
+          {many && listNames(dormant.map((d) => d.name))}
+        </div>
+      ),
+      confirmLabel: 'Olvidar',
+      danger: true,
+    });
+    if (!ok) return;
+    scope.setData(await api.webScopeForget(many ? { all: true } : { host: w.host }));
+  }
   async function recheckAside() {
     setRechecking(true);
     try {
@@ -340,12 +356,24 @@ export function WebsView({
                         >
                           Vigilar igualmente
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => void forget(w)}
+                          aria-label={`Olvidar ${w.name}`}
+                          title="Olvidar: no vuelve a probarse"
+                          className="-mr-1 shrink-0 rounded-md p-1.5 text-ink-3 transition-colors hover:bg-bad/10 hover:text-bad"
+                        >
+                          <X size={13} aria-hidden />
+                        </button>
                       </li>
                     ))}
                   </ul>
-                  <div className="border-t border-line px-3 py-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-3 py-2">
                     <Button size="sm" variant="ghost" loading={rechecking} onClick={() => void recheckAside()}>
                       <RefreshCw size={13} aria-hidden /> Probarlas ahora
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => void forget(null)} className="text-ink-3 hover:text-bad">
+                      <Trash2 size={13} aria-hidden /> Olvidar {dormant.length === 1 ? 'la' : 'todas'}
                     </Button>
                   </div>
                 </div>
@@ -392,7 +420,7 @@ export function WebsView({
                 <span className="block text-ink-2">Solo las webs que funcionan</span>
                 <span className="block text-[11.5px] text-ink-3">
                   {onlyWorking
-                    ? 'Se apartan las que no han respondido nunca o llevan un día caídas. Si una que funciona se cae, se queda y te avisa.'
+                    ? 'Se apartan a los pocos minutos las que no han respondido nunca, y las que llevan un día caídas. Si una que funciona se cae, se queda y te avisa.'
                     : 'Desactivado: se vigilan todas, respondan o no.'}
                 </span>
               </span>

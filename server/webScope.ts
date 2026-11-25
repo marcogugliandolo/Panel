@@ -11,7 +11,7 @@
  *
  * Las apartadas se comprueban cada 10 minutos y vuelven solas a la lista en cuanto responden (y,
  * con el primer ajuste, están bien en NPM). Con «Vigilar igualmente» se fija una web para que no se
- * aparte. Sin datos de NPM, o si el panel no ha podido comprobar nada últimamente, no se toca nada.
+ * aparte; con «Olvidar» se quita del todo. Sin datos de NPM, o si el panel no ha podido comprobar nada últimamente, no se toca nada.
  */
 import express from 'express';
 import type { Monitor } from '../shared/types';
@@ -28,7 +28,7 @@ const EVERY_MS = 2 * 60_000;
 /** Lo automático solo actúa si la situación dura este rato (por si un envío del script llega incompleto). */
 const GRACE_MS = Number(process.env.WEBS_PRUNE_GRACE_MS) || 4 * 60_000;
 /** Una web nueva que no ha respondido nunca en este tiempo se aparta. */
-const NEVER_MS = Number(process.env.WEBS_NEVER_MS) || 10 * 60_000;
+const NEVER_MS = Number(process.env.WEBS_NEVER_MS) || 3 * 60_000;
 /** Una web que funcionaba se aparta si lleva este tiempo sin responder. */
 const DOWN_MS = Number(process.env.WEBS_DOWN_MS) || 24 * 3_600_000;
 /** Cada cuánto se vuelve a probar una web apartada. */
@@ -278,6 +278,24 @@ export function createWebScope(db: DB, { monitors, npm }: Deps) {
   router.post('/recheck', async (_req, res) => {
     const back = await recheck(true);
     res.json({ back, ...state() });
+  });
+  /** «Olvidar»: deja de probarse y no vuelve (tampoco desde NPM ni la búsqueda de webs). */
+  router.post('/forget', (req, res) => {
+    const hosts: string[] = req.body?.all
+      ? (db.prepare('SELECT host FROM web_dormant').all() as { host: string }[]).map((r) => r.host)
+      : [String(req.body?.host ?? '').toLowerCase()].filter(Boolean);
+    for (const host of hosts) {
+      db.prepare('DELETE FROM web_dormant WHERE host = ?').run(host);
+      try {
+        db.prepare(
+          `INSERT INTO web_candidates (host, source, checked_at, dismissed) VALUES (?, 'npm', ?, 1) ON CONFLICT(host) DO UPDATE SET dismissed = 1`,
+        ).run(host, Date.now());
+      } catch {
+        /* sin búsqueda de webs todavía */
+      }
+    }
+    if (hosts.length) console.log(`[webs] Olvidadas ${hosts.length} web(s) apartadas: ${hosts.join(', ')}`);
+    res.json(state());
   });
   /** «Vigilar igualmente»: vuelve a la lista y no se aparta aunque no funcione. */
   router.post('/keep', (req, res) => {

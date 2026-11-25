@@ -11,6 +11,7 @@ import { createNpmService } from './npm';
 import { createDiagnoser } from './diagnose';
 import { createDiscovery } from './discovery';
 import { createWebScope } from './webScope';
+import { createPortainerScan } from './portainerScan';
 import { createLayoutRouter } from './routes/layout';
 import { createPortainerRouter } from './routes/portainer';
 import { createIngestHandler, createStatsRouter } from './routes/stats';
@@ -39,7 +40,9 @@ async function main() {
   const auth = createAuth(db);
   const monitors = createMonitorService(db);
   const npm = createNpmService(db, monitors);
-  monitors.setDiagnoser(createDiagnoser(db, npm));
+  const portainerScan = createPortainerScan(db);
+  npm.setExtraDetected(() => portainerScan.npmServers());
+  monitors.setDiagnoser(createDiagnoser(db, npm, portainerScan));
   const webScope = createWebScope(db, { monitors, npm });
   const discovery = createDiscovery(db, monitors, npm, { npmOnly: webScope.npmOnly });
   const notifier = createNotifier(db, monitors);
@@ -99,6 +102,7 @@ async function main() {
   }, 3_600_000).unref();
   monitors.start();
   notifier.start();
+  portainerScan.start();
   npm.start();
   discovery.start();
   webScope.start();

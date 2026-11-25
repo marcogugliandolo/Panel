@@ -240,10 +240,13 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
   });
   const detectedAuto = (serverId: string) => (db.prepare('SELECT value FROM settings WHERE key = ?').pluck().get(`npm_auto_srv_${serverId}`) as string | undefined) !== '0';
 
+  /** NPM encontrados por otra vía (Portainer), para los servidores cuyo script no los envía. */
+  let extraDetected: () => { serverId: string; title: string; online: boolean; at: number; hosts: DetectedNpmHost[] }[] = () => [];
+
   function detectedServers() {
     const titles = new Map<string, string>();
     for (const n of readLayout(db).layout.nodes) if (n.serverId && !titles.has(n.serverId)) titles.set(n.serverId, n.title || n.serverId);
-    return readAllStats(db)
+    const fromScript = readAllStats(db)
       .filter((s) => s.npmHosts)
       .map((s) => ({
         serverId: s.serverId,
@@ -252,6 +255,10 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
         at: s.lastUpdated,
         hosts: s.npmHosts!.map(toDetected),
       }));
+    const fromPortainer = extraDetected()
+      .filter((e) => !fromScript.some((d) => d.serverId === e.serverId))
+      .map((e) => ({ ...e, title: titles.get(e.serverId) ?? e.title, hosts: e.hosts.map(toDetected) }));
+    return [...fromScript, ...fromPortainer];
   }
   type Detected = ReturnType<typeof detectedServers>[number];
   const detectedInfo = (d: Detected): NpmInstanceInfo => ({
@@ -534,6 +541,10 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
     findHost,
     findHosts,
     npmStatus,
+    /** Otra fuente de NPM detectados (Portainer). */
+    setExtraDetected(fn: typeof extraDetected) {
+      extraDetected = fn;
+    },
     domainsByInstance,
     instances: () => rows().map(info),
     start() {

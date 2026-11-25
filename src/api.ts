@@ -266,6 +266,7 @@ export const api = {
   webScopePrune: () => request<WebScope & { removed: string[]; setAside: string[] }>('/webs/scope/prune', { method: 'POST' }),
   webScopeRecheck: () => request<WebScope & { back: string[] }>('/webs/scope/recheck', { method: 'POST' }),
   webScopeKeep: (host: string) => request<WebScope>('/webs/scope/keep', { method: 'POST', body: { host } }),
+  webScopeForget: (target: { host: string } | { all: true }) => request<WebScope>('/webs/scope/forget', { method: 'POST', body: target }),
   discovery: () => request<DiscoveryState>('/discovery'),
   discoveryRun: () => request<DiscoveryState>('/discovery/run', { method: 'POST' }),
   discoveryWatch: (hosts: string[]) => request<DiscoveryState & { added: string[] }>('/discovery/watch', { method: 'POST', body: { hosts } }),

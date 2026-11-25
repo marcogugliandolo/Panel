@@ -291,7 +291,7 @@ function ensureIpTable(db: DB) {
     server_id TEXT NOT NULL, ip TEXT NOT NULL, container TEXT NOT NULL, seen_at INTEGER NOT NULL,
     PRIMARY KEY (server_id, ip))`);
 }
-function createIpMemory(db: DB) {
+export function createIpMemory(db: DB) {
   ensureIpTable(db);
   const put = db.prepare(
     `INSERT INTO container_ips (server_id, ip, container, seen_at) VALUES (?, ?, ?, ?)

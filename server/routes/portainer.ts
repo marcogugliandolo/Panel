@@ -16,9 +16,9 @@ class PortainerError extends Error {
   }
 }
 
-const isConfigured = () => Boolean(config.portainerUrl && config.portainerToken);
+export const isConfigured = () => Boolean(config.portainerUrl && config.portainerToken);
 
-async function portainerFetch(path: string, init: RequestInit = {}): Promise<Response> {
+export async function portainerFetch(path: string, init: RequestInit = {}): Promise<Response> {
   if (!isConfigured()) throw new PortainerError('Portainer no está configurado', 503);
   let response: Response;
   try {

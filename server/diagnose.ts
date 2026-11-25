@@ -22,6 +22,7 @@ import { exitCode } from '../shared/health';
 import type { DB } from './db';
 import type { NpmProxyHost, NpmService } from './npm';
 import { readLayout } from './routes/layout';
+import type { PortainerScan } from './portainerScan';
 import { containerForIp, readAllStats } from './routes/stats';
 
 const DNS_TIMEOUT_MS = 4_000;
@@ -312,17 +313,19 @@ const STEP_TITLE: Record<RouteStepId, string> = {
   app: 'Falla la aplicación',
 };
 
-export function createDiagnoser(db: DB, npm: NpmService) {
+export function createDiagnoser(db: DB, npm: NpmService, portainer?: PortainerScan) {
   return async function diagnose(monitor: Monitor): Promise<Diagnosis> {
     const url = new URL(monitor.url);
     const hostname = url.hostname;
     const isHttps = url.protocol === 'https:';
     const port = Number(url.port) || (isHttps ? 443 : 80);
-    const statsList = readAllStats(db);
+    // Lo que envían los scripts, completado con lo que se ve en Portainer (contenedores, redes, puertos).
+    const statsList = portainer ? portainer.enrich(readAllStats(db)) : readAllStats(db);
     const layoutNodes = readLayout(db).layout.nodes;
     const serverName = (id: string | null | undefined) =>
       (id && (layoutNodes.find((n) => n.serverId === id)?.title || statsList.find((s) => s.serverId === id)?.hostname)) || id || 'el servidor';
-    const endpointOf = (id: string) => layoutNodes.find((n) => n.serverId === id && n.portainerEndpointId)?.portainerEndpointId ?? null;
+    const endpointOf = (id: string) =>
+      layoutNodes.find((n) => n.serverId === id && n.portainerEndpointId)?.portainerEndpointId ?? portainer?.endpointOf(id) ?? null;
 
     const matches = await npm.findHosts(hostname).catch(() => [] as Awaited<ReturnType<NpmService['findHosts']>>);
     type Match = (typeof matches)[number];
@@ -506,7 +509,7 @@ export function createDiagnoser(db: DB, npm: NpmService) {
       'proxy',
       proxyLabel,
       'ok',
-      match ? `Tiene ${hostname} activo y lo manda a ${forward}.` : isNpmServer(p) ? 'Responde (no está en ningún NPM conectado al panel, así que no sé a dónde lo manda).' : `Responde (${p.server || 'servidor web'}).`,
+      match ? `Tiene ${hostname} activo y lo manda a ${forward}.` : isNpmServer(p) ? 'Responde (no está en ningún NPM que conozca el panel, así que no sé a dónde lo manda).' : `Responde (${p.server || 'servidor web'}).`,
     );
 
     /* 5. Contenedor de destino */
@@ -609,7 +612,9 @@ export function createDiagnoser(db: DB, npm: NpmService) {
         'skip',
         npm.domainsByInstance().length
           ? `${hostname} no está en ningún Nginx Proxy Manager conocido, así que no sé qué contenedor hay detrás.`
-          : 'Aún no sé qué contenedor hay detrás: actualiza el script de métricas en el servidor donde está Nginx Proxy Manager y el panel lo leerá solo.',
+          : portainer && portainer.scans().length
+            ? `No encuentro Nginx Proxy Manager en ningún entorno de Portainer (${portainer.scans().map((sc) => sc.name).join(', ')}) ni en los scripts de métricas, así que no sé qué contenedor hay detrás.`
+            : 'Aún no sé qué contenedor hay detrás: conecta Portainer al panel o actualiza el script de métricas en el servidor donde está Nginx Proxy Manager.',
       );
     }
 
