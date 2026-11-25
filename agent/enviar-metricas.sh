@@ -43,6 +43,45 @@ json_str() {
   printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
+# Nginx Proxy Manager de este servidor (si lo hay): qué dominio manda a qué contenedor y puerto.
+# Se lee de sus archivos de configuración (/data/nginx/proxy_host/*.conf), sin usuario ni contraseña.
+# Un archivo .conf.err es un host que NPM no ha podido cargar (error de configuración).
+leer_npm() {
+  NPM_FOUND=""
+  NPM_JSON=""
+  command -v docker > /dev/null 2>&1 || return 0
+  local id src stream
+  id=$(docker ps -a --format '{{.ID}}|{{.Image}}|{{.Names}}' 2>/dev/null |
+    awk -F'|' 'tolower($2 " " $3) ~ /nginx-proxy-manager/ { print $1; exit }')
+  [ -n "$id" ] || return 0
+  src=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$id" 2>/dev/null)
+  if [ -n "$src" ] && [ -d "$src/nginx/proxy_host" ]; then
+    stream=$(for f in "$src"/nginx/proxy_host/*.conf "$src"/nginx/proxy_host/*.conf.err; do
+      [ -f "$f" ] && { echo "### $f"; cat "$f"; }
+    done)
+  else
+    # Sin acceso a la carpeta desde fuera: se pide al propio contenedor (solo si está en marcha).
+    stream=$(docker exec "$id" sh -c 'for f in /data/nginx/proxy_host/*.conf /data/nginx/proxy_host/*.conf.err; do [ -f "$f" ] && { echo "### $f"; cat "$f"; }; done' 2>/dev/null) || return 0
+  fi
+  NPM_FOUND=1
+  NPM_JSON=$(printf '%s\n' "$stream" | awk '
+    function out(   n, i, d, arr) {
+      if (names == "") return
+      n = split(names, arr, /[ \t]+/); d = ""
+      for (i = 1; i <= n; i++) if (arr[i] != "") d = d (d == "" ? "" : ",") "\"" arr[i] "\""
+      all = all (all == "" ? "" : ",") "{\"domains\":[" d "],\"host\":\"" host "\",\"port\":" (port ~ /^[0-9]+$/ ? port : 0) \
+        ",\"scheme\":\"" scheme "\",\"ssl\":" (ssl ? "true" : "false") ",\"error\":" (err ? "true" : "false") "}"
+    }
+    /^### / { out(); names = ""; host = ""; port = ""; scheme = "http"; ssl = 0; err = ($2 ~ /\.err$/); next }
+    /^[ \t]*server_name[ \t]/ { if (names == "") { v = $0; sub(/^[ \t]*server_name[ \t]+/, "", v); sub(/;.*$/, "", v); gsub(/["\\]/, "", v); names = v }; next }
+    /^[ \t]*set[ \t]+\$server[ \t]/ { if (host == "") { v = $0; sub(/^[ \t]*set[ \t]+\$server[ \t]+/, "", v); sub(/;.*$/, "", v); gsub(/["\\ \t]/, "", v); host = v }; next }
+    /^[ \t]*set[ \t]+\$port[ \t]/ { if (port == "") { v = $3; sub(/;.*$/, "", v); gsub(/"/, "", v); port = v }; next }
+    /^[ \t]*set[ \t]+\$forward_scheme[ \t]/ { v = $3; sub(/;.*$/, "", v); gsub(/["\\]/, "", v); scheme = v; next }
+    /^[ \t]*listen[ \t].*443/ { ssl = 1 }
+    END { out(); print all }
+  ')
+}
+
 enviar() {
   # 1. CPU: uso medio durante 1 segundo, a partir de /proc/stat
   read_cpu() {
@@ -114,7 +153,11 @@ enviar() {
     IPS="${IPS:+$IPS,}\"$(json_str "$ip")\""
   done
 
-  PAYLOAD="{\"cpu\":${CPU},\"ram\":${RAM},\"disk\":${DISK},\"uptime\":${UPTIME},\"hostname\":\"$(json_str "$HOST")\",\"ips\":[${IPS}],\"containers\":[${CONTAINERS}]}"
+  leer_npm
+  NPM_PART=""
+  [ -n "$NPM_FOUND" ] && NPM_PART=",\"npm\":[${NPM_JSON}]"
+
+  PAYLOAD="{\"cpu\":${CPU},\"ram\":${RAM},\"disk\":${DISK},\"uptime\":${UPTIME},\"hostname\":\"$(json_str "$HOST")\",\"ips\":[${IPS}],\"containers\":[${CONTAINERS}]${NPM_PART}}"
 
   if [ -n "${DRY_RUN:-}" ]; then
     echo "$PAYLOAD"

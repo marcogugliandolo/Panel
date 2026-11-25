@@ -8,7 +8,10 @@
  * Puede haber varios NPM (uno por servidor); cada uno se asocia al servidor del panel donde está instalado.
  */
 import express from 'express';
+import type { DetectedNpmHost } from '../shared/types';
 import type { DB } from './db';
+import { readLayout } from './routes/layout';
+import { readAllStats } from './routes/stats';
 
 export interface NpmProxyHost {
   id: number;
@@ -188,7 +191,7 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
   /** Los comodines (*.dominio) no son una web concreta que se pueda comprobar. */
   const importable = (domain: string) => !domain.includes('*');
 
-  function importDomains(row: InstanceRow, hosts: NpmProxyHost[], domains: Set<string>): string[] {
+  function importDomains(label: string, hosts: NpmProxyHost[], domains: Set<string>): string[] {
     const watched = watchedHostnames();
     const added: string[] = [];
     for (const host of hosts) {
@@ -201,7 +204,7 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
         }
       }
     }
-    if (added.length) console.log(`[npm] ${row.name}: se vigilan ${added.length} web(s) nuevas: ${added.join(', ')}`);
+    if (added.length) console.log(`[npm] ${label}: se vigilan ${added.length} web(s) nuevas: ${added.join(', ')}`);
     return added;
   }
 
@@ -217,9 +220,69 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
     // La primera vez no se importa nada solo: eso lo decide la persona desde el panel.
     if (known.length) {
       const fresh = new Set(all.filter((d) => !known.includes(d)));
-      if (fresh.size) importDomains(row, hosts, fresh);
+      if (fresh.size) importDomains(row.name, hosts, fresh);
     }
     db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(`npm_known_${row.id}`, JSON.stringify(all));
+  }
+
+  /* --- NPM detectados por el script de métricas (sin usuario ni contraseña) --- */
+  const toDetected = (h: DetectedNpmHost, i: number): NpmProxyHost => ({
+    id: i + 1,
+    domains: h.domains,
+    forwardScheme: h.scheme,
+    forwardHost: h.host,
+    forwardPort: h.port,
+    // NPM borra el archivo de los hosts desactivados: los que llegan están activos.
+    enabled: true,
+    ssl: h.ssl,
+    online: !h.error,
+    error: h.error ? 'NPM no ha podido cargar su configuración (el archivo quedó como .conf.err). Ábrelo en NPM y guárdalo para ver el error.' : null,
+  });
+  const detectedAuto = (serverId: string) => (db.prepare('SELECT value FROM settings WHERE key = ?').pluck().get(`npm_auto_srv_${serverId}`) as string | undefined) !== '0';
+
+  function detectedServers() {
+    const titles = new Map<string, string>();
+    for (const n of readLayout(db).layout.nodes) if (n.serverId && !titles.has(n.serverId)) titles.set(n.serverId, n.title || n.serverId);
+    return readAllStats(db)
+      .filter((s) => s.npmHosts)
+      .map((s) => ({
+        serverId: s.serverId,
+        title: titles.get(s.serverId) ?? s.hostname ?? s.serverId,
+        online: s.online,
+        at: s.lastUpdated,
+        hosts: s.npmHosts!.map(toDetected),
+      }));
+  }
+  type Detected = ReturnType<typeof detectedServers>[number];
+  const detectedInfo = (d: Detected): NpmInstanceInfo => ({
+    id: 0,
+    name: `NPM ${d.title}`,
+    url: '',
+    email: '',
+    serverId: d.serverId,
+    autoImport: detectedAuto(d.serverId),
+    hostsCount: d.hosts.length,
+    syncedAt: d.at,
+    lastError: null,
+  });
+
+  /** Webs de los NPM detectados: la primera vez se vigilan todas; luego, solo las nuevas (si no se ha desactivado). */
+  function importDetected() {
+    for (const d of detectedServers()) {
+      if (!detectedAuto(d.serverId)) continue;
+      const key = `npm_known_srv_${d.serverId}`;
+      const stored = db.prepare('SELECT value FROM settings WHERE key = ?').pluck().get(key) as string | undefined;
+      let known: string[] | null = null;
+      try {
+        known = stored ? JSON.parse(stored) : null;
+      } catch {
+        known = null;
+      }
+      const all = d.hosts.flatMap((h) => h.domains);
+      const wanted = new Set(known ? all.filter((x) => !known!.includes(x)) : all);
+      if (wanted.size) importDomains(`NPM ${d.title}`, d.hosts, wanted);
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, JSON.stringify(all));
+    }
   }
 
   function info(row: InstanceRow): NpmInstanceInfo {
@@ -253,6 +316,10 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
       const host = hosts.find((h) => h.domains.some((d) => domainMatches(d, hostname)));
       if (host) return { instance: info(getRow(row.id) ?? row), host, siblings: hosts.filter((h) => h !== host && h.enabled).flatMap((h) => h.domains) };
     }
+    for (const d of detectedServers()) {
+      const host = d.hosts.find((h) => h.domains.some((x) => domainMatches(x, hostname)));
+      if (host) return { instance: detectedInfo(d), host, siblings: d.hosts.filter((h) => h !== host).flatMap((h) => h.domains) };
+    }
     return null;
   }
 
@@ -276,6 +343,45 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
   }
 
   router.get('/', (_req, res) => res.json(rows().map(info)));
+
+  const withWatch = (hosts: NpmProxyHost[]) => {
+    const watched = watchedHostnames();
+    return hosts.map((h) => ({ ...h, watched: h.domains.filter((d) => watched.has(d)), importable: h.domains.filter(importable) }));
+  };
+  const findDetected = (serverId: string) => detectedServers().find((d) => d.serverId === serverId);
+
+  router.get('/detected', (_req, res) =>
+    res.json(detectedServers().map((d) => ({ ...detectedInfo(d), title: d.title, online: d.online }))),
+  );
+  router.get('/detected/:serverId/hosts', (req, res) => {
+    const d = findDetected(req.params.serverId);
+    if (!d) {
+      res.status(404).json({ error: 'Ese servidor no ha enviado datos de Nginx Proxy Manager' });
+      return;
+    }
+    res.json(withWatch(d.hosts));
+  });
+  router.post('/detected/:serverId/import', (req, res) => {
+    const d = findDetected(req.params.serverId);
+    if (!d) {
+      res.status(404).json({ error: 'No encontrado' });
+      return;
+    }
+    const wanted = new Set<string>((Array.isArray(req.body?.domains) ? req.body.domains : []).map((x: unknown) => String(x).toLowerCase()));
+    res.json({ added: importDomains(`NPM ${d.title}`, d.hosts, wanted) });
+  });
+  router.put('/detected/:serverId', (req, res) => {
+    const d = findDetected(req.params.serverId);
+    if (!d) {
+      res.status(404).json({ error: 'No encontrado' });
+      return;
+    }
+    const on = req.body?.autoImport !== false;
+    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(`npm_auto_srv_${d.serverId}`, on ? '1' : '0');
+    // Al volver a activarlo, las que aparezcan desde ahora se vigilan solas (no se recuperan las que quitaste).
+    if (on) db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(`npm_known_srv_${d.serverId}`, JSON.stringify(d.hosts.flatMap((h) => h.domains)));
+    res.json({ ...detectedInfo(d), title: d.title, online: d.online });
+  });
 
   router.post('/', async (req, res) => {
     const { value, error } = readBody(req.body, false);
@@ -369,13 +475,16 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
       return;
     }
     const wanted = new Set<string>((Array.isArray(req.body?.domains) ? req.body.domains : []).map((d: unknown) => String(d).toLowerCase()));
-    const added = importDomains(row, cachedHosts(row), wanted);
+    const added = importDomains(row.name, cachedHosts(row), wanted);
     res.json({ added });
   });
 
   /** Dominios activos de cada NPM (lo último que se supo), para reconocer su servidor por la IP. */
   function domainsByInstance() {
-    return rows().map((row) => ({ instance: info(row), domains: cachedHosts(row).filter((h) => h.enabled).flatMap((h) => h.domains).filter(importable) }));
+    return [
+      ...rows().map((row) => ({ instance: info(row), domains: cachedHosts(row).filter((h) => h.enabled).flatMap((h) => h.domains).filter(importable) })),
+      ...detectedServers().map((d) => ({ instance: detectedInfo(d), domains: d.hosts.flatMap((h) => h.domains).filter(importable) })),
+    ];
   }
 
   return {
@@ -389,6 +498,9 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
       };
       setTimeout(tick, 5_000).unref();
       setInterval(tick, 60_000).unref();
+      // Los detectados por el script: se espera a que lleguen las primeras métricas tras arrancar.
+      setTimeout(() => importDetected(), 30_000).unref();
+      setInterval(() => importDetected(), 60_000).unref();
     },
   };
 }

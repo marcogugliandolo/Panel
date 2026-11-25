@@ -1,5 +1,5 @@
 import express from 'express';
-import type { ContainerInfo, HistoryRange, MetricPoint, ServerStats } from '../../shared/types';
+import type { ContainerInfo, DetectedNpmHost, HistoryRange, MetricPoint, ServerStats } from '../../shared/types';
 import { config } from '../config';
 import type { DB } from '../db';
 
@@ -26,6 +26,7 @@ interface StatsRow {
   container_list: string | null;
   containers: string | null;
   ips: string | null;
+  npm_hosts: string | null;
   last_updated: number;
 }
 
@@ -75,6 +76,29 @@ function stateFromStatus(status: string | null): string {
   if (text.startsWith('dead')) return 'dead';
   if (text.startsWith('removal')) return 'removing';
   return 'unknown';
+}
+
+/** Proxy hosts de NPM que lee el script en el servidor. */
+function toNpmHosts(value: unknown[]): DetectedNpmHost[] {
+  const hosts: DetectedNpmHost[] = [];
+  for (const raw of value.slice(0, 500)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const r = raw as Record<string, unknown>;
+    const domains = (Array.isArray(r.domains) ? r.domains : [])
+      .map((d) => String(d).toLowerCase().trim())
+      .filter((d) => /^[a-z0-9*][a-z0-9.*-]{0,252}$/.test(d))
+      .slice(0, 50);
+    if (!domains.length) continue;
+    hosts.push({
+      domains,
+      host: cleanText(r.host, 200) ?? '',
+      port: Number(r.port) > 0 && Number(r.port) < 65536 ? Number(r.port) : 0,
+      scheme: r.scheme === 'https' ? 'https' : 'http',
+      ssl: r.ssl === true,
+      error: r.error === true,
+    });
+  }
+  return hosts;
 }
 
 /** IPs que envía el script (IPv4/IPv6 sin más). */
@@ -149,6 +173,7 @@ function rowToStats(row: StatsRow, now: number): ServerStats {
     appsRunning: row.apps_running,
     containers,
     ips: parseJson<string[]>(row.ips, []),
+    npmHosts: parseJson<DetectedNpmHost[] | null>(row.npm_hosts, null),
     lastUpdated: row.last_updated,
     online: now - row.last_updated <= config.offlineAfterMs,
   };
@@ -160,8 +185,8 @@ export function createIngestHandler(db: DB): express.RequestHandler {
 
   const upsert = db.prepare(`
     INSERT INTO server_stats (server_id, cpu_usage, ram_usage, disk_usage, uptime_seconds, hostname,
-                              apps_total, apps_running, container_list, containers, ips, last_updated)
-    VALUES (@serverId, @cpu, @ram, @disk, @uptime, @hostname, @appsTotal, @appsRunning, @containerList, @containers, @ips, @now)
+                              apps_total, apps_running, container_list, containers, ips, npm_hosts, last_updated)
+    VALUES (@serverId, @cpu, @ram, @disk, @uptime, @hostname, @appsTotal, @appsRunning, @containerList, @containers, @ips, @npmHosts, @now)
     ON CONFLICT (server_id) DO UPDATE SET
       cpu_usage = excluded.cpu_usage,
       ram_usage = excluded.ram_usage,
@@ -173,6 +198,7 @@ export function createIngestHandler(db: DB): express.RequestHandler {
       container_list = excluded.container_list,
       containers = excluded.containers,
       ips = excluded.ips,
+      npm_hosts = excluded.npm_hosts,
       last_updated = excluded.last_updated
   `);
   const insertMetric = db.prepare('INSERT INTO metrics (server_id, ts, cpu, ram, disk) VALUES (?, ?, ?, ?, ?)');
@@ -212,6 +238,7 @@ export function createIngestHandler(db: DB): express.RequestHandler {
       containerList: JSON.stringify(containers.map((c) => c.name)),
       containers: JSON.stringify(containers),
       ips: JSON.stringify(toIps(body.ips)),
+      npmHosts: Array.isArray(body.npm) ? JSON.stringify(toNpmHosts(body.npm)) : null,
       now,
     });
 

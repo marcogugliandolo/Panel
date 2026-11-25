@@ -335,12 +335,12 @@ export function createDiagnoser(db: DB, npm: NpmService) {
       return finish();
     }
     if (match && !match.host.online) {
-      add('proxy', proxyLabel, 'fail', `${match.instance.name} tiene un error en la configuración de este host${match.host.error ? `: ${match.host.error}` : ''}.`);
+      add('proxy', proxyLabel, 'fail', `${match.instance.name} tiene un error en la configuración de este host${match.host.error ? `: ${match.host.error.replace(/\.$/, '')}` : ''}.`);
       skipRest(['container', 'app']);
       return finish();
     }
     if (looksLikeNpmDefault(p) || (!match && isNpmServer(p) && p.status === 404)) {
-      add('proxy', proxyLabel, 'fail', `${guessedNpm ?? 'Nginx Proxy Manager'} recibe la visita, pero no tiene ${hostname} configurado (sale su página por defecto). Crea o revisa el proxy host.`);
+      add('proxy', proxyLabel, 'fail', `${guessedNpm ?? 'Nginx Proxy Manager'} recibe la visita, pero no tiene ${hostname} configurado o está desactivado (sale su página por defecto). Revisa el proxy host en NPM.`);
       skipRest(['container', 'app']);
       return finish();
     }
@@ -387,7 +387,14 @@ export function createDiagnoser(db: DB, npm: NpmService) {
         );
       }
     } else {
-      add('container', 'Contenedor', 'skip', 'Conecta Nginx Proxy Manager en la Recepción para saber qué contenedor hay detrás de esta web.');
+      add(
+        'container',
+        'Contenedor',
+        'skip',
+        npm.domainsByInstance().length
+          ? `${hostname} no está en ningún Nginx Proxy Manager conocido, así que no sé qué contenedor hay detrás.`
+          : 'Aún no sé qué contenedor hay detrás: actualiza el script de métricas en el servidor donde está Nginx Proxy Manager y el panel lo leerá solo.',
+      );
     }
 
     /* 6. Aplicación */

@@ -20,6 +20,17 @@ export interface ContainerInfo {
   ports?: string | null;
 }
 
+/** Un proxy host de NPM tal como lo lee el script de métricas en el servidor. */
+export interface DetectedNpmHost {
+  domains: string[];
+  host: string;
+  port: number;
+  scheme: string;
+  ssl: boolean;
+  /** NPM no ha podido cargar su configuración (archivo .conf.err). */
+  error: boolean;
+}
+
 export interface ServerStats {
   serverId: string;
   hostname: string | null;
@@ -32,6 +43,8 @@ export interface ServerStats {
   containers: ContainerInfo[];
   /** IPs del servidor (las que da `hostname -I`), si el script las envía. */
   ips: string[];
+  /** Proxy hosts del Nginx Proxy Manager de este servidor, leídos por el script de sus archivos (null si no tiene). */
+  npmHosts: DetectedNpmHost[] | null;
   /** Milisegundos desde epoch del último envío del script. */
   lastUpdated: number;
   /** false si lleva más de OFFLINE_AFTER_MINUTES sin enviar datos. */

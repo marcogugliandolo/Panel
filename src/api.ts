@@ -104,6 +104,11 @@ export interface NpmInstance {
   syncedAt: number | null;
   lastError: string | null;
 }
+/** NPM leído por el script de métricas en un servidor (sin usuario ni contraseña). */
+export interface NpmDetected extends NpmInstance {
+  title: string;
+  online: boolean;
+}
 export interface NpmInstanceInput {
   name: string;
   url: string;
@@ -199,6 +204,12 @@ export const api = {
   npmRemove: (id: number) => request<{ success: boolean }>(`/npm/${id}`, { method: 'DELETE' }),
   npmHosts: (id: number, refresh = false) => request<NpmHost[]>(`/npm/${id}/hosts${refresh ? '?refresh=1' : ''}`),
   npmImport: (id: number, domains: string[]) => request<{ added: string[] }>(`/npm/${id}/import`, { method: 'POST', body: { domains } }),
+  npmDetected: () => request<NpmDetected[]>('/npm/detected'),
+  npmDetectedHosts: (serverId: string) => request<NpmHost[]>(`/npm/detected/${enc(serverId)}/hosts`),
+  npmDetectedImport: (serverId: string, domains: string[]) =>
+    request<{ added: string[] }>(`/npm/detected/${enc(serverId)}/import`, { method: 'POST', body: { domains } }),
+  npmDetectedAuto: (serverId: string, autoImport: boolean) =>
+    request<NpmDetected>(`/npm/detected/${enc(serverId)}`, { method: 'PUT', body: { autoImport } }),
   monitorHistory: (id: number, range: HistoryRange) =>
     request<MonitorHistory & { bucketMs: number }>(`/monitors/${id}/history?range=${range}`),
 };

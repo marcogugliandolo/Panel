@@ -491,6 +491,25 @@ function ReceptionPanel({
   // Diagnósticos pedidos a mano (los de las caídas vienen ya en cada web).
   const [manual, setManual] = useState<Record<number, Monitor['diagnosis']>>({});
   const toast = useToast();
+  const confirm = useConfirm();
+
+  async function forget(m: Monitor) {
+    const ok = await confirm({
+      title: `Dejar de vigilar ${m.name}`,
+      message: <p>Se borra su historial. Si viene de Nginx Proxy Manager, no se volverá a añadir sola.</p>,
+      confirmLabel: 'Dejar de vigilar',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.deleteMonitor(m.id);
+      toast(`${m.name} ya no se vigila`);
+      setOpen(null);
+      await onChange();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'No se pudo quitar', 'bad');
+    }
+  }
 
   // Las caídas se ven abiertas, para ver dónde fallan sin tocar nada.
   const firstDown = (monitors ?? []).find((m) => m.status === 'down')?.id ?? null;
@@ -633,6 +652,11 @@ function ReceptionPanel({
                         </Button>
                       </div>
                     )}
+                    <div className="mt-3 flex justify-end border-t border-line pt-2">
+                      <button type="button" onClick={() => forget(m)} className="inline-flex items-center gap-1 text-[11.5px] text-ink-3 hover:text-bad">
+                        <Trash2 size={12} aria-hidden /> Dejar de vigilar
+                      </button>
+                    </div>
                   </div>
                 )}
               </li>

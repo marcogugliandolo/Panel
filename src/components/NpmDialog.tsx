@@ -1,11 +1,14 @@
 import { ArrowLeft, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { api, ApiError, type NpmHost, type NpmInstance, type NpmInstanceInput } from '../api';
+import { api, ApiError, type NpmDetected, type NpmHost, type NpmInstance, type NpmInstanceInput } from '../api';
 import { timeAgo } from '../lib/format';
 import { cn } from '../lib/utils';
 import { Button, Dialog, Field, Spinner, StatusBadge, inputClass, useConfirm, useToast } from './ui';
 
-type Step = { kind: 'list' } | { kind: 'form'; editing: NpmInstance | null } | { kind: 'hosts'; instance: NpmInstance };
+/** De dónde salen las webs: un NPM conectado con usuario (api) o uno que lee el script en el servidor (script). */
+type Source = { kind: 'api'; instance: NpmInstance } | { kind: 'script'; detected: NpmDetected };
+type Step = { kind: 'list' } | { kind: 'form'; editing: NpmInstance | null } | { kind: 'hosts'; source: Source };
+const sourceName = (s: Source) => (s.kind === 'api' ? s.instance.name : s.detected.name);
 
 const errorText = (caught: unknown, fallback: string) => (caught instanceof ApiError ? caught.message : fallback);
 const emptyForm = (serverId: string | null): NpmInstanceInput => ({ name: '', url: '', email: '', password: '', serverId, autoImport: true });
@@ -23,6 +26,7 @@ export function NpmDialog({
   onImported: () => void;
 }) {
   const [instances, setInstances] = useState<NpmInstance[] | null>(null);
+  const [detected, setDetected] = useState<NpmDetected[]>([]);
   const [step, setStep] = useState<Step>({ kind: 'list' });
   const [form, setForm] = useState<NpmInstanceInput>(emptyForm(null));
   const [hosts, setHosts] = useState<NpmHost[] | null>(null);
@@ -37,11 +41,11 @@ export function NpmDialog({
     if (!open) return;
     setError(null);
     setInstances(null);
-    api
-      .npmInstances()
-      .then((list) => {
+    Promise.all([api.npmInstances(), api.npmDetected().catch(() => [] as NpmDetected[])])
+      .then(([list, found]) => {
         setInstances(list);
-        if (list.length === 0) openForm(null);
+        setDetected(found);
+        if (list.length === 0 && found.length === 0) openForm(null);
         else setStep({ kind: 'list' });
       })
       .catch((caught) => setError(errorText(caught, 'No se pudo leer la configuración')));
@@ -70,13 +74,22 @@ export function NpmDialog({
     setStep({ kind: 'form', editing });
   }
 
-  const showHosts = (instance: NpmInstance, refresh = false) =>
+  const loadHosts = (source: Source, refresh = false) =>
+    source.kind === 'api' ? api.npmHosts(source.instance.id, refresh) : api.npmDetectedHosts(source.detected.serverId!);
+
+  const showHosts = (source: Source, refresh = false) =>
     run('hosts', async () => {
-      const list = await api.npmHosts(instance.id, refresh);
+      const list = await loadHosts(source, refresh);
       setHosts(list);
       // Por defecto, todas las activas que aún no se vigilan.
       setPicked(new Set(list.filter((h) => h.enabled).flatMap((h) => h.importable.filter((d) => !h.watched.includes(d)))));
-      setStep({ kind: 'hosts', instance });
+      setStep({ kind: 'hosts', source });
+    });
+
+  const toggleDetectedAuto = (d: NpmDetected) =>
+    run('auto', async () => {
+      const updated = await api.npmDetectedAuto(d.serverId!, !d.autoImport);
+      setDetected((prev) => prev.map((x) => (x.serverId === d.serverId ? updated : x)));
     });
 
   const save = (editing: NpmInstance | null) =>
@@ -87,7 +100,7 @@ export function NpmDialog({
       setInstances(list);
       toast(editing ? 'Cambios guardados' : `${saved.name} conectado: ${saved.hostsCount ?? 0} webs encontradas`);
       if (editing) setStep({ kind: 'list' });
-      else await showHosts(saved);
+      else await showHosts({ kind: 'api', instance: saved });
     });
 
   const remove = async (instance: NpmInstance) => {
@@ -102,16 +115,17 @@ export function NpmDialog({
       await api.npmRemove(instance.id);
       const list = await api.npmInstances();
       setInstances(list);
-      if (!list.length) openForm(null);
+      if (!list.length && !detected.length) openForm(null);
     });
   };
 
-  const importPicked = (instance: NpmInstance) =>
+  const importPicked = (source: Source) =>
     run('import', async () => {
-      const { added } = await api.npmImport(instance.id, [...picked]);
+      const domains = [...picked];
+      const { added } = source.kind === 'api' ? await api.npmImport(source.instance.id, domains) : await api.npmDetectedImport(source.detected.serverId!, domains);
       toast(added.length ? `Se vigilan ${added.length} webs nuevas` : 'No había webs nuevas que añadir');
       onImported();
-      setHosts(await api.npmHosts(instance.id));
+      setHosts(await loadHosts(source));
       setPicked(new Set());
     });
 
@@ -132,8 +146,8 @@ export function NpmDialog({
       <div className="space-y-4 text-sm text-ink-2">
         {!editing && (
           <p>
-            Con tu Nginx Proxy Manager conectado, el panel sabe todas tus webs y a qué contenedor manda cada una. Así, cuando una se cae, puede
-            decirte en qué punto de la ruta está el problema.
+            Lo más cómodo es no hacer nada: con el script de métricas actualizado en el servidor donde está Nginx Proxy Manager, el panel lee
+            sus webs solo. Si prefieres conectarlo con un usuario (por ejemplo, porque está en una máquina sin el script), rellena esto.
           </p>
         )}
         <div className="grid gap-4 sm:grid-cols-2">
@@ -195,7 +209,7 @@ export function NpmDialog({
     );
     footer = (
       <>
-        {instances && instances.length > 0 && (
+        {((instances && instances.length > 0) || detected.length > 0) && (
           <Button variant="ghost" onClick={() => setStep({ kind: 'list' })}>
             Cancelar
           </Button>
@@ -206,15 +220,15 @@ export function NpmDialog({
       </>
     );
   } else if (step.kind === 'hosts') {
-    const instance = step.instance;
+    const source = step.source;
     body = (
       <div className="space-y-3 text-sm text-ink-2">
         <div className="flex items-center justify-between gap-3">
           <button type="button" onClick={() => setStep({ kind: 'list' })} className="inline-flex items-center gap-1 text-[12.5px] text-ink-2 hover:text-ink">
-            <ArrowLeft size={14} aria-hidden /> {instance.name}
+            <ArrowLeft size={14} aria-hidden /> {sourceName(source)}
           </button>
-          <button type="button" onClick={() => showHosts(instance, true)} className="inline-flex items-center gap-1 text-[12.5px] text-ink-2 hover:text-ink" disabled={busy === 'hosts'}>
-            <RefreshCw size={12} className={cn(busy === 'hosts' && 'animate-spin')} aria-hidden /> Releer de NPM
+          <button type="button" onClick={() => showHosts(source, true)} className="inline-flex items-center gap-1 text-[12.5px] text-ink-2 hover:text-ink" disabled={busy === 'hosts'}>
+            <RefreshCw size={12} className={cn(busy === 'hosts' && 'animate-spin')} aria-hidden /> {source.kind === 'api' ? 'Releer de NPM' : 'Actualizar'}
           </button>
         </div>
         <p>Marca las webs que quieres que el panel vigile. Las que ya se vigilan salen marcadas como tal.</p>
@@ -262,13 +276,44 @@ export function NpmDialog({
       </div>
     );
     footer = (
-      <Button variant="primary" loading={busy === 'import'} disabled={pendingCount === 0} onClick={() => importPicked(instance)}>
+      <Button variant="primary" loading={busy === 'import'} disabled={pendingCount === 0} onClick={() => importPicked(source)}>
         {pendingCount ? `Vigilar ${pendingCount} ${pendingCount === 1 ? 'web' : 'webs'}` : 'Nada nuevo que vigilar'}
       </Button>
     );
   } else {
     body = (
       <div className="space-y-3">
+        {detected.length > 0 && (
+          <p className="text-[12.5px] text-ink-3">
+            Leídos por el script de métricas en cada servidor, sin usuario ni contraseña. Se actualizan solos cada pocos segundos.
+          </p>
+        )}
+        {detected.map((d) => (
+          <div key={`srv-${d.serverId}`} className="rounded-[10px] border border-line px-3 py-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[13.5px] font-medium text-ink">{d.name}</span>
+              <StatusBadge tone={d.online ? 'ok' : 'warn'} label={d.online ? 'Detectado' : 'Sin datos recientes'} />
+            </div>
+            <p className="mt-1 text-xs text-ink-3">
+              {d.hostsCount ?? 0} proxy hosts · leído {timeAgo(d.syncedAt)}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+              <Button size="sm" loading={busy === 'hosts'} onClick={() => showHosts({ kind: 'script', detected: d })}>
+                Ver sus webs
+              </Button>
+              <label className="inline-flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-2">
+                <input
+                  type="checkbox"
+                  checked={d.autoImport}
+                  disabled={busy === 'auto'}
+                  onChange={() => toggleDetectedAuto(d)}
+                  className="size-4 accent-[var(--color-accent)]"
+                />
+                Vigilar solas sus webs nuevas
+              </label>
+            </div>
+          </div>
+        ))}
         {(instances ?? []).map((instance) => (
           <div key={instance.id} className="rounded-[10px] border border-line px-3 py-2.5">
             <div className="flex flex-wrap items-center gap-2">
@@ -284,7 +329,7 @@ export function NpmDialog({
             </p>
             {instance.lastError && <p className="mt-1 text-xs text-bad">{instance.lastError}</p>}
             <div className="mt-2 flex flex-wrap gap-2">
-              <Button size="sm" loading={busy === 'hosts'} onClick={() => showHosts(instance)}>
+              <Button size="sm" loading={busy === 'hosts'} onClick={() => showHosts({ kind: 'api', instance })}>
                 Ver sus webs
               </Button>
               <Button size="sm" variant="ghost" icon={<Pencil size={13} aria-hidden />} onClick={() => openForm(instance)}>
@@ -299,8 +344,8 @@ export function NpmDialog({
       </div>
     );
     footer = (
-      <Button icon={<Plus size={15} aria-hidden />} onClick={() => openForm(null)}>
-        Conectar otro NPM
+      <Button variant={detected.length ? 'ghost' : 'secondary'} icon={<Plus size={15} aria-hidden />} onClick={() => openForm(null)}>
+        {detected.length || (instances ?? []).length ? 'Conectar otro NPM con usuario' : 'Conectar NPM con usuario'}
       </Button>
     );
   }
