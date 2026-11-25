@@ -18,7 +18,7 @@ export const config = {
   telegramToken: (process.env.TELEGRAM_BOT_TOKEN || '').trim(),
   telegramChatId: (process.env.TELEGRAM_CHAT_ID || '').trim(),
   telegramApiUrl: (process.env.TELEGRAM_API_URL || 'https://api.telegram.org').replace(/\/+$/, ''),
-  notifyIntervalMs: positiveNumber('NOTIFY_INTERVAL_SECONDS', 60) * 1000,
+  notifyIntervalMs: positiveNumber('NOTIFY_INTERVAL_SECONDS', 10) * 1000,
   // Desactiva el doble factor al arrancar (si pierdes el móvil y los códigos de recuperación). Quítala después.
   twoFactorReset: /^(1|true|si|sí|yes)$/i.test(process.env.PANEL_2FA_RESET || ''),
 
@@ -27,7 +27,7 @@ export const config = {
 
   // Un servidor se considera caído si lleva este tiempo sin enviar métricas.
   // Los scripts se ejecutan cada minuto por cron: 5 minutos sin datos = 5 envíos perdidos.
-  offlineAfterMs: positiveNumber('OFFLINE_AFTER_MINUTES', 5) * 60_000,
+  offlineAfterMs: positiveNumber('OFFLINE_AFTER_MINUTES', 2) * 60_000,
   // Días de historial (métricas y comprobaciones de webs) que se conservan.
   historyDays: positiveNumber('HISTORY_DAYS', 30),
 

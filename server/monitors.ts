@@ -13,6 +13,8 @@ import type { DB } from './db';
 import { HISTORY_RANGES } from './routes/stats';
 
 const TICK_MS = 10_000;
+/** Tras un primer fallo, la web se vuelve a comprobar a los pocos segundos para confirmar (o descartar) la caída. */
+const QUICK_RETRY_MS = 15_000;
 const CERT_REFRESH_MS = 12 * 3_600_000;
 const MAX_CONCURRENT = 6;
 const USER_AGENT = 'ServerPanel-Monitor/2.0 (+uptime check)';
@@ -177,6 +179,13 @@ export function createMonitorService(db: DB) {
     // El monitor puede haberse borrado mientras se comprobaba.
     const stillExists = db.prepare('SELECT 1 FROM monitors WHERE id = ?').get(monitor.id);
     if (stillExists) insertCheck.run(monitor.id, ts, ok ? 1 : 0, statusCode, latency, error);
+    // Primer fallo después de ir bien: se repite enseguida para confirmar la caída sin esperar al intervalo entero.
+    if (ok) retrySoon.delete(monitor.id);
+    else {
+      const previous = db.prepare('SELECT ok FROM monitor_checks WHERE monitor_id = ? AND ts < ? ORDER BY ts DESC LIMIT 1').get(monitor.id, ts) as { ok: number } | undefined;
+      if (!previous || previous.ok) retrySoon.add(monitor.id);
+      else retrySoon.delete(monitor.id);
+    }
 
     const url = new URL(monitor.url);
     if (stillExists && url.protocol === 'https:' && ts - (monitor.cert_checked_at ?? 0) > CERT_REFRESH_MS) {
@@ -184,6 +193,9 @@ export function createMonitorService(db: DB) {
       updateCert.run(cert.expiresAt, cert.issuer, cert.error, Date.now(), monitor.id);
     }
   }
+
+  /** Webs cuyo último intento falló después de ir bien: se repiten a los pocos segundos. */
+  const retrySoon = new Set<number>();
 
   function schedule(monitor: MonitorRow, force = false): Promise<void> | null {
     if (running.has(monitor.id)) return null;
@@ -207,7 +219,8 @@ export function createMonitorService(db: DB) {
         last = row.ts ?? 0;
         lastRun.set(monitor.id, last);
       }
-      if (now - last >= monitor.interval_sec * 1000) schedule(monitor);
+      const wait = retrySoon.has(monitor.id) ? Math.min(QUICK_RETRY_MS, monitor.interval_sec * 1000) : monitor.interval_sec * 1000;
+      if (now - last >= wait) schedule(monitor);
     }
   }
 

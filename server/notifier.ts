@@ -1,7 +1,7 @@
 /*
  * Avisos por Telegram.
  *
- * Cada minuto se revisa, en el propio servidor (sin depender de que haya un navegador abierto), lo mismo que la
+ * Cada 10 segundos se revisa, en el propio servidor (sin depender de que haya un navegador abierto), lo mismo que la
  * campana del panel: servidores que no envían datos, contenedores caídos, webs caídas y certificados a punto de
  * caducar (y, si se activa, CPU/RAM/disco altos). Se avisa al caerse y al recuperarse, todo lo nuevo de una
  * revisión junto en un solo mensaje.
@@ -30,8 +30,10 @@ export interface NotifyRules {
 const DEFAULT_RULES: NotifyRules = { servers: true, containers: true, webs: true, certs: true, resources: false, manualStops: false };
 
 type Kind = 'server' | 'container' | 'web' | 'cert' | 'resource';
-/** Revisiones seguidas que tiene que durar un problema antes de avisar (evita avisos por un reinicio de segundos). */
-const CONFIRM: Record<Kind, number> = { server: 1, container: 2, web: 1, cert: 1, resource: 5 };
+/** CPU, RAM o disco tienen que seguir altos este tiempo antes de avisar. */
+const RESOURCE_MIN_MS = 5 * 60_000;
+/** Un contenedor parado hace menos de esto puede ser un reinicio o una actualización: se espera al siguiente envío. */
+const FRESH_STOP_SEC = 20;
 /** Una parada hecha desde el panel no avisa; se olvida al volver a arrancar o, como mucho, en una semana. */
 const MANUAL_STOP_MS = 7 * 86_400_000;
 /**
@@ -52,6 +54,12 @@ interface Condition {
   down: string;
   /** Desde cuándo está mal, si se sabe (un servidor: desde su último envío). */
   since?: number;
+  /** Hora del envío de métricas en que se ha visto (para contenedores). */
+  obs?: number;
+  /** Hay que verlo también en el siguiente envío antes de avisar (puede ser un reinicio de segundos). */
+  needsSecondReport?: boolean;
+  /** Tiempo mínimo que tiene que durar antes de avisar. */
+  minAgeMs?: number;
 }
 interface StateRow {
   key: string;
@@ -61,6 +69,7 @@ interface StateRow {
   seen: number;
   notified: number;
   down_text: string;
+  first_obs: number;
 }
 
 function duration(ms: number): string {
@@ -80,6 +89,29 @@ function certBucket(days: number): number {
   if (days < 3) return 3;
   if (days < 7) return 7;
   return 14;
+}
+
+/** Segundos desde que paró, a partir del texto de Docker («Exited (0) 2 minutes ago»). */
+function stoppedAgoSec(status?: string | null): number | null {
+  const m = /exited \(\d+\)\s+(.+?)\s+ago/i.exec(status ?? '');
+  if (!m) return null;
+  const t = m[1].toLowerCase();
+  if (t.startsWith('less than')) return 0;
+  if (t.startsWith('about a minute')) return 60;
+  if (t.startsWith('about an hour')) return 3600;
+  const n = /^(\d+)\s+(second|minute|hour|day|week|month|year)/.exec(t);
+  if (!n) return null;
+  const unit: Record<string, number> = { second: 1, minute: 60, hour: 3600, day: 86_400, week: 604_800, month: 2_592_000, year: 31_536_000 };
+  return Number(n[1]) * unit[n[2]];
+}
+/** ¿Hay que esperar al siguiente envío para estar seguros de que no es un reinicio de segundos? */
+function stopNeedsConfirmation(c: { state: string; status?: string | null }): boolean {
+  if (c.state === 'exited') {
+    const ago = stoppedAgoSec(c.status);
+    return ago === null || ago < FRESH_STOP_SEC;
+  }
+  // LXC/VM apagadas, en pausa o muertas no son un paso intermedio de nada: se avisa ya.
+  return !['stopped', 'paused', 'dead'].includes(c.state);
 }
 
 const CONTAINER_LABEL: Record<string, string> = {
@@ -117,6 +149,8 @@ export function createNotifier(db: DB, monitors: { list(): Monitor[] }) {
       PRIMARY KEY (server_id, name)
     );
   `);
+  const stateColumns = (db.prepare('PRAGMA table_info(notify_state)').all() as { name: string }[]).map((c) => c.name);
+  if (!stateColumns.includes('first_obs')) db.exec('ALTER TABLE notify_state ADD COLUMN first_obs INTEGER NOT NULL DEFAULT 0');
   const getStmt = db.prepare('SELECT value FROM settings WHERE key = ?');
   const setStmt = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
   const get = (key: string) => (getStmt.get(key) as { value: string } | undefined)?.value ?? null;
@@ -249,7 +283,15 @@ export function createNotifier(db: DB, monitors: { list(): Monitor[] }) {
           const wasService = Boolean(m && m.last_running - m.running_since >= SERVICE_MIN_MS);
           if (isContainerProblem(c) || wasService) {
             const why = stops[mk] ? `${containerProblemText(c)} desde el panel` : containerProblemText(c);
-            add({ key: group, group, kind: 'container', down: `🔴 Contenedor <b>${cname}</b> en <b>${name}</b>: ${why}`, since: m?.last_running });
+            add({
+              key: group,
+              group,
+              kind: 'container',
+              down: `🔴 Contenedor <b>${cname}</b> en <b>${name}</b>: ${why}`,
+              since: m?.last_running,
+              obs: stats.lastUpdated,
+              needsSecondReport: stopNeedsConfirmation(c),
+            });
           }
         }
         // Los que estaban en marcha y ya no aparecen en la lista (parados con el script antiguo, o eliminados).
@@ -264,7 +306,15 @@ export function createNotifier(db: DB, monitors: { list(): Monitor[] }) {
             if (m.last_running - m.running_since < SERVICE_MIN_MS) continue;
             const cname = esc(m.name);
             present.set(group, `🟢 <b>${cname}</b> en ${name} vuelve a estar en marcha`);
-            add({ key: group, group, kind: 'container', down: `🔴 Contenedor <b>${cname}</b> en <b>${name}</b>: ya no aparece (parado o eliminado)`, since: m.last_running });
+            add({
+              key: group,
+              group,
+              kind: 'container',
+              down: `🔴 Contenedor <b>${cname}</b> en <b>${name}</b>: ya no aparece (parado o eliminado)`,
+              since: m.last_running,
+              obs: stats.lastUpdated,
+              needsSecondReport: true,
+            });
           }
         }
       }
@@ -279,7 +329,7 @@ export function createNotifier(db: DB, monitors: { list(): Monitor[] }) {
           if (value === null) continue;
           const group = `res:${sid}:${k}`;
           present.set(group, `🟢 <b>${name}</b>: ${label} de nuevo normal (${pct(value)})`);
-          if (value > limit) add({ key: group, group, kind: 'resource', down: `🟠 <b>${name}</b>: ${label} al ${pct(value)}` });
+          if (value > limit) add({ key: group, group, kind: 'resource', down: `🟠 <b>${name}</b>: ${label} al ${pct(value)}`, minAgeMs: RESOURCE_MIN_MS });
         }
       }
     }
@@ -325,7 +375,15 @@ export function createNotifier(db: DB, monitors: { list(): Monitor[] }) {
         for (const c of conditions.values()) {
           const row = rows.get(c.key);
           if (row) db.prepare('UPDATE notify_state SET seen = seen + 1, down_text = ? WHERE key = ?').run(c.down, c.key);
-          else db.prepare('INSERT INTO notify_state (key, grp, kind, since, seen, notified, down_text) VALUES (?, ?, ?, ?, 1, 0, ?)').run(c.key, c.group, c.kind, c.since ?? now, c.down);
+          else
+            db.prepare('INSERT INTO notify_state (key, grp, kind, since, seen, notified, down_text, first_obs) VALUES (?, ?, ?, ?, 1, 0, ?, ?)').run(
+              c.key,
+              c.group,
+              c.kind,
+              c.since ?? now,
+              c.down,
+              c.obs ?? now,
+            );
         }
       })();
 
@@ -333,8 +391,11 @@ export function createNotifier(db: DB, monitors: { list(): Monitor[] }) {
       const ups: { row: StateRow; text: string }[] = [];
       const silent: string[] = [];
       for (const row of allRows()) {
-        if (conditions.has(row.key)) {
-          if (!row.notified && row.seen >= CONFIRM[row.kind]) downs.push(row);
+        const current = conditions.get(row.key);
+        if (current) {
+          const secondReport = !current.needsSecondReport || (current.obs ?? 0) > row.first_obs;
+          const oldEnough = !current.minAgeMs || now - row.since >= current.minAgeMs;
+          if (!row.notified && secondReport && oldEnough) downs.push(row);
           continue;
         }
         if (unknown.has(row.grp)) continue;
@@ -391,9 +452,9 @@ export function createNotifier(db: DB, monitors: { list(): Monitor[] }) {
     db.transaction(() => {
       for (const c of problems) {
         db.prepare(
-          `INSERT INTO notify_state (key, grp, kind, since, seen, notified, down_text) VALUES (?, ?, ?, ?, ?, 1, ?)
+          `INSERT INTO notify_state (key, grp, kind, since, seen, notified, down_text, first_obs) VALUES (?, ?, ?, ?, 1, 1, ?, ?)
            ON CONFLICT(key) DO UPDATE SET notified = 1`,
-        ).run(c.key, c.group, c.kind, c.since ?? now, CONFIRM[c.kind], c.down);
+        ).run(c.key, c.group, c.kind, c.since ?? now, c.down, c.obs ?? now);
       }
     })();
   }

@@ -14,7 +14,7 @@ Panel de control de la infraestructura propia: Raspberry Pi, VPS de Contabo y Or
 - **Contenedores vía Portainer.** Estado real de todos los contenedores, arrancar, parar, reiniciar y leer logs.
 - **Monitor de webs.** Comprueba cada URL a intervalos, mide el tiempo de respuesta, calcula el uptime y avisa si el certificado SSL va a caducar. La primera vez que arranca sin webs vigila vaixataxi.es, panel.marcogugliandolo.com y portainer.marcogugliandolo.com.
 - **Avisos.** Servidor sin respuesta, CPU/RAM/disco altos, contenedores caídos, webs caídas y certificados a punto de caducar. Se pueden ocultar hasta el día siguiente.
-- **Avisos por Telegram.** Desde la campana → **Avisos por Telegram**: pegas el token de un bot creado con @BotFather, le escribes al bot y el panel encuentra tu chat solo. A partir de ahí te escribe cuando un servidor deja de enviar datos, un contenedor se cae, una web no responde o un certificado está a punto de caducar, y otra vez cuando se recupera (con cuánto tiempo estuvo caído). Lo vigila el propio servidor cada minuto, así que funciona sin tener el panel abierto. Avisa de cualquier contenedor que estaba en marcha y se para (también con `docker stop`, aunque salga con código 0, y las LXC/VM de Proxmox que se apagan); las tareas puntuales que terminan solas no avisan. Lo que se cae a la vez llega en un solo mensaje y no repite avisos al reiniciar el panel. Lo que paras con los botones del panel no avisa, salvo que actives «También lo que pares tú desde el panel». Se puede elegir qué avisar (CPU/RAM/disco altos va desactivado por defecto).
+- **Avisos por Telegram.** Desde la campana → **Avisos por Telegram**: pegas el token de un bot creado con @BotFather, le escribes al bot y el panel encuentra tu chat solo. A partir de ahí te escribe cuando un servidor deja de enviar datos, un contenedor se cae, una web no responde o un certificado está a punto de caducar, y otra vez cuando se recupera (con cuánto tiempo estuvo caído). Lo vigila el propio servidor cada 10 segundos, así que funciona sin tener el panel abierto. Un contenedor parado avisa en unos 20-40 s (con el script que envía cada 20 s), una web caída en menos de un minuto (si falla, se vuelve a comprobar a los 15 s para confirmar) y un servidor que deja de enviar datos, a los 2 minutos. Avisa de cualquier contenedor que estaba en marcha y se para (también con `docker stop`, aunque salga con código 0, y las LXC/VM de Proxmox que se apagan); las tareas puntuales que terminan solas no avisan. Lo que se cae a la vez llega en un solo mensaje y no repite avisos al reiniciar el panel. Lo que paras con los botones del panel no avisa, salvo que actives «También lo que pares tú desde el panel». Se puede elegir qué avisar (CPU/RAM/disco altos va desactivado por defecto).
 - **Acceso con sesión real.** La API entera exige iniciar sesión (cookie `HttpOnly`), con límite de intentos fallidos. Los scripts de métricas usan su propio token.
 - **Doble factor (TOTP).** Desde el botón de la llave de la cabecera (**Seguridad**) se activa: escaneas el QR con Google Authenticator, Aegis, 1Password, Bitwarden… y a partir de ahí, para entrar hace falta la contraseña y el código de 6 cifras. Al activarlo se dan 10 códigos de recuperación de un solo uso (se pueden regenerar) y se cierran las demás sesiones abiertas. Un código ya usado no vale dos veces.
   - **Si pierdes el móvil y los códigos de recuperación:** añade `PANEL_2FA_RESET=1` al stack, reinicia, entra solo con la contraseña, vuelve a activarlo y **quita la variable**.
@@ -79,7 +79,7 @@ Los valores de `${...}` se rellenan en la sección **Environment variables** del
 | `STATS_TOKEN` | vacío | Token que deben enviar los scripts de métricas. Vacío = se aceptan envíos sin token (solo mientras actualizas los scripts). Genera uno con `openssl rand -hex 32`. |
 | `PORTAINER_URL` | vacío | URL de Portainer, p. ej. `https://portainer.marcogugliandolo.com`. |
 | `PORTAINER_TOKEN` | vacío | Token de acceso de Portainer (**My account → Access tokens**). |
-| `OFFLINE_AFTER_MINUTES` | `5` | Minutos sin recibir métricas para dar un servidor por caído. |
+| `OFFLINE_AFTER_MINUTES` | `2` | Minutos sin recibir métricas para dar un servidor por caído. |
 | `HISTORY_DAYS` | `30` | Días de historial que se conservan. |
 | `PANEL_PORT` | `3000` | Puerto publicado en el host (solo en el compose). |
 | `TRUST_PROXY` | redes privadas | Proxies de confianza para `X-Forwarded-*` (Nginx Proxy Manager, Traefik…). |
@@ -88,7 +88,7 @@ Con `PORTAINER_URL` y `PORTAINER_TOKEN` configurados, vincula cada servidor con 
 
 ## Script de métricas
 
-`agent/enviar-metricas.sh` se ejecuta cada minuto en cada servidor y envía CPU, RAM, disco, tiempo encendido y el estado de todos los contenedores Docker, también los parados. En Proxmox informa además de los contenedores LXC y las máquinas virtuales. Solo necesita `bash` y `curl`.
+`agent/enviar-metricas.sh` se ejecuta cada minuto en cada servidor (desde cron) y, dentro de ese minuto, envía 3 veces (cada 20 s, ajustable con `ENVIOS_POR_MINUTO`) CPU, RAM, disco, tiempo encendido y el estado de todos los contenedores Docker, también los parados. En Proxmox informa además de los contenedores LXC y las máquinas virtuales. Solo necesita `bash` y `curl`.
 
 ### Instalarlo o actualizarlo en un servidor
 
