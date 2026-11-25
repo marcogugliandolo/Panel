@@ -170,3 +170,11 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Sección Webs: el paso donde se corta la ruta late hacia fuera. */
+.route-pulse { transform-box: fill-box; transform-origin: center; animation: route-pulse 1.6s ease-out infinite; }
+@keyframes route-pulse {
+  from { transform: scale(1); opacity: 0.7; }
+  to { transform: scale(1.7); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .route-pulse { animation: none; } }

@@ -9,17 +9,21 @@ import { OfficeView } from './office/OfficeView';
 import { RECEPTION_KEY, type SceneNetDevice } from './office/scene';
 import { SecurityDialog } from './SecurityDialog';
 import { TelegramDialog } from './TelegramDialog';
+import { WebsView } from './webs/WebsView';
 import { ServerDrawer } from './server/ServerDrawer';
 import { TopologyCanvas } from './topology/TopologyCanvas';
 import { Spinner, useToast } from './ui';
 
 /** Fecha local AAAA-MM-DD: los avisos ocultos vuelven al día siguiente. */
 const localDay = () => new Date().toLocaleDateString('sv-SE');
-const VIEWS: View[] = ['clasica', 'oficina', 'edificio'];
+const VIEWS: View[] = ['clasica', 'oficina', 'webs'];
 
 export function Dashboard({ session, onLogout }: { session: Session; onLogout: () => void }) {
-  const [storedView, setView] = useStoredState<View>('panel:vista', 'clasica');
-  const view: View = VIEWS.includes(storedView) ? storedView : 'clasica';
+  const [storedView, setView] = useStoredState<View | 'edificio'>('panel:vista', 'clasica');
+  // Oficina y Edificio son ahora una sola vista; dentro se elige el plano o el corte del edificio.
+  const view: View = storedView === 'edificio' ? 'oficina' : VIEWS.includes(storedView) ? storedView : 'clasica';
+  const [sceneMode, setSceneMode] = useStoredState<'oficina' | 'edificio'>('panel:oficina-modo', storedView === 'edificio' ? 'edificio' : 'oficina');
+  const [webId, setWebId] = useState<number | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [dismissed, setDismissed] = useStoredState<Record<string, string>>('dismissed_alerts', {});
   const [editing, setEditing] = useState(false);
@@ -92,9 +96,9 @@ export function Dashboard({ session, onLogout }: { session: Session; onLogout: (
     if (alert.target.kind === 'server') {
       setSelectedKey(alert.target.key);
     } else {
-      // Las webs las atiende la recepción de la oficina.
-      if (view === 'clasica') setView('oficina');
-      setSelectedKey(RECEPTION_KEY);
+      // Las webs tienen su propia sección.
+      setView('webs');
+      setWebId(alert.target.id);
     }
   }
 
@@ -162,15 +166,30 @@ export function Dashboard({ session, onLogout }: { session: Session; onLogout: (
           </>
         )}
         {/* La oficina sigue viva en segundo plano para no perder el registro ni las animaciones. */}
-        <div className="h-full" hidden={view === 'clasica'}>
+        {view === 'webs' && (
+          <WebsView
+            monitors={monitorsQuery.data}
+            onChange={monitorsQuery.refresh}
+            servers={servers.filter((s) => s.serverId).map((s) => ({ serverId: s.serverId!, title: s.title }))}
+            selectedId={webId}
+            onSelect={setWebId}
+            now={now}
+          />
+        )}
+        <div className="h-full" hidden={view !== 'oficina'}>
           <OfficeView
-            mode={view === 'edificio' ? 'edificio' : 'oficina'}
+            mode={sceneMode}
+            onModeChange={setSceneMode}
+            onOpenWeb={(id) => {
+              setWebId(id);
+              setView('webs');
+            }}
             servers={servers}
             network={network}
             monitors={monitorsQuery.data}
-            selectedKey={view === 'clasica' ? null : selectedKey}
+            selectedKey={view === 'oficina' ? selectedKey : null}
             onSelect={setSelectedKey}
-            onFloor={() => setView('oficina')}
+            onFloor={() => setSceneMode('oficina')}
             onMonitorsChange={monitorsQuery.refresh}
             portainer={portainerQuery.data}
             endpoints={endpointsQuery.data}

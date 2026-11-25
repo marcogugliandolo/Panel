@@ -1,20 +1,20 @@
-import { Activity, AlertTriangle, Bell, Briefcase, Building2, Edit2, Info, KeyRound, LogOut, Network, Save, Send, Settings2, ShieldCheck, X } from 'lucide-react';
+import { Activity, AlertTriangle, Bell, Briefcase, Edit2, Globe, Info, KeyRound, LogOut, Network, Save, Send, Settings2, ShieldCheck, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '../lib/utils';
 import type { PanelAlert } from '../lib/status';
 
-export type View = 'clasica' | 'oficina' | 'edificio';
+export type View = 'clasica' | 'oficina' | 'webs';
 
 const SUBTITLES: Record<View, string> = {
   clasica: 'Vista esquemática servidores',
   oficina: 'Vista oficina',
-  edificio: 'Vista edificio',
+  webs: 'Webs y cortes',
 };
 
 const VIEWS: { value: View; label: string; icon: typeof Network }[] = [
   { value: 'clasica', label: 'Clásica', icon: Network },
   { value: 'oficina', label: 'Oficina', icon: Briefcase },
-  { value: 'edificio', label: 'Edificio', icon: Building2 },
+  { value: 'webs', label: 'Webs', icon: Globe },
 ];
 
 interface HeaderProps {

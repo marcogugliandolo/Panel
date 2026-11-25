@@ -10,6 +10,9 @@ import type {
   PortainerEndpoint,
   PortainerStatus,
   ServerStats,
+  WebBars,
+  WebIncident,
+  WebTraffic,
 } from '../shared/types';
 
 export class ApiError extends Error {
@@ -210,6 +213,9 @@ export const api = {
     request<{ added: string[] }>(`/npm/detected/${enc(serverId)}/import`, { method: 'POST', body: { domains } }),
   npmDetectedAuto: (serverId: string, autoImport: boolean) =>
     request<NpmDetected>(`/npm/detected/${enc(serverId)}`, { method: 'PUT', body: { autoImport } }),
+  webBars: () => request<WebBars>('/monitors/bars'),
+  webIncidents: (id: number, range: HistoryRange) => request<WebIncident[]>(`/monitors/${id}/incidents?range=${range}`),
+  webTraffic: (id: number, range: HistoryRange) => request<WebTraffic>(`/monitors/${id}/traffic?range=${range}`),
   monitorHistory: (id: number, range: HistoryRange) =>
     request<MonitorHistory & { bucketMs: number }>(`/monitors/${id}/history?range=${range}`),
 };

@@ -46,7 +46,7 @@ async function main() {
   });
   app.use('/api/auth', auth.router);
   // Los scripts de métricas envían aquí (token propio, sin sesión).
-  app.post('/api/stats/:id', requireStatsToken, createIngestHandler(db));
+  app.post('/api/stats/:id', requireStatsToken, createIngestHandler(db, (samples) => monitors.webHistory.addTraffic(samples)));
 
   // A partir de aquí, todo exige sesión.
   app.use('/api', auth.requireAuth);
@@ -86,7 +86,11 @@ async function main() {
   }
 
   pruneHistory(db);
-  setInterval(() => pruneHistory(db), 3_600_000).unref();
+  monitors.webHistory.prune();
+  setInterval(() => {
+    pruneHistory(db);
+    monitors.webHistory.prune();
+  }, 3_600_000).unref();
   monitors.start();
   notifier.start();
   npm.start();

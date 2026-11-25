@@ -4,6 +4,7 @@ import tls from 'node:tls';
 import type {
   Diagnosis,
   HistoryRange,
+  WebBars,
   Monitor,
   MonitorCheck,
   MonitorHistoryPoint,
@@ -12,6 +13,7 @@ import type {
 } from '../shared/types';
 import type { DB } from './db';
 import { HISTORY_RANGES } from './routes/stats';
+import { createWebHistory } from './incidents';
 
 const TICK_MS = 10_000;
 /** Tras un primer fallo, la web se vuelve a comprobar a los pocos segundos para confirmar (o descartar) la caída. */
@@ -143,6 +145,8 @@ export function createMonitorService(db: DB) {
     const has = (db.prepare('PRAGMA table_info(monitors)').all() as { name: string }[]).some((c) => c.name === column);
     if (!has) db.exec(`ALTER TABLE monitors ADD COLUMN ${column} ${type}`);
   }
+  /** Cortes de cada web y tráfico real leído de NPM. */
+  const webHistory = createWebHistory(db);
   /** Quien sabe seguir la ruta de una web (se conecta al arrancar, para no depender de NPM aquí). */
   let diagnoser: ((monitor: Monitor) => Promise<Diagnosis>) | null = null;
   const diagnosing = new Set<number>();
@@ -188,7 +192,10 @@ export function createMonitorService(db: DB) {
     // El monitor puede haberse borrado mientras se comprobaba.
     const stillExists = db.prepare('SELECT 1 FROM monitors WHERE id = ?').get(monitor.id);
     if (stillExists) insertCheck.run(monitor.id, ts, ok ? 1 : 0, statusCode, latency, error);
-    if (stillExists) afterCheck(monitor.id, ok);
+    if (stillExists) {
+      webHistory.recordCheck(monitor.id, ts, ok, error);
+      afterCheck(monitor.id, ok);
+    }
     // Primer fallo después de ir bien: se repite enseguida para confirmar la caída sin esperar al intervalo entero.
     if (ok) retrySoon.delete(monitor.id);
     else {
@@ -215,6 +222,8 @@ export function createMonitorService(db: DB) {
     }
     const recent = db.prepare('SELECT ok FROM monitor_checks WHERE monitor_id = ? ORDER BY ts DESC LIMIT 2').all(id) as { ok: number }[];
     const down = recent.length > 0 && recent.every((c) => !c.ok);
+    // Si ya hay un diagnóstico reciente de esta caída, es la causa del corte que se acaba de abrir.
+    if (down && previous && !previous.ok && Date.now() - previous.at < 5 * 60_000) webHistory.recordDiagnosis(id, previous);
     // Se repite cada pocos minutos mientras siga caída, por si cambia el motivo.
     if (down && (!previous || previous.ok || Date.now() - previous.at > 3 * 60_000)) void diagnose(id);
   }
@@ -226,7 +235,10 @@ export function createMonitorService(db: DB) {
     diagnosing.add(id);
     try {
       const result = await diagnoser(toMonitor(row));
-      if (getRow(id)) db.prepare('UPDATE monitors SET diagnosis = ? WHERE id = ?').run(JSON.stringify(result), id);
+      if (getRow(id)) {
+        db.prepare('UPDATE monitors SET diagnosis = ? WHERE id = ?').run(JSON.stringify(result), id);
+        webHistory.recordDiagnosis(id, result);
+      }
       return result;
     } catch (error) {
       console.error(`[monitor] No se pudo diagnosticar ${row.url}:`, error);
@@ -407,6 +419,7 @@ export function createMonitorService(db: DB) {
     const id = Number(req.params.id);
     db.prepare('DELETE FROM monitor_checks WHERE monitor_id = ?').run(id);
     db.prepare('DELETE FROM monitors WHERE id = ?').run(id);
+    webHistory.forgetMonitor(id);
     lastRun.delete(id);
     res.json({ success: true });
   });
@@ -419,6 +432,59 @@ export function createMonitorService(db: DB) {
     }
     await (schedule({ ...row, cert_checked_at: 0 }, true) ?? Promise.resolve());
     res.json(toMonitor(getRow(row.id)!));
+  });
+
+  const hostOf = (row: MonitorRow) => {
+    try {
+      return new URL(row.url).hostname.toLowerCase();
+    } catch {
+      return null;
+    }
+  };
+  const rangeOf = (value: unknown): HistoryRange => ((value as HistoryRange) in HISTORY_RANGES ? (value as HistoryRange) : '24h');
+
+  /** Minibarras de las últimas 24 h de todas las webs (una por hora), para la lista de la sección Webs. */
+  router.get('/bars', (_req, res) => {
+    const hour = 3_600_000;
+    const since = Math.floor(Date.now() / hour) * hour - 23 * hour;
+    const rows = db
+      .prepare(
+        `SELECT monitor_id AS id, CAST(ts / ${hour} AS INTEGER) * ${hour} AS t, ROUND(AVG(ok) * 100, 1) AS uptime
+         FROM monitor_checks WHERE ts >= ? GROUP BY monitor_id, t`,
+      )
+      .all(since) as { id: number; t: number; uptime: number }[];
+    const bars: WebBars = {};
+    for (const m of db.prepare('SELECT id FROM monitors').all() as { id: number }[]) {
+      bars[m.id] = Array.from({ length: 24 }, (_, i) => ({ t: since + i * hour, uptime: null }));
+    }
+    for (const r of rows) {
+      const slot = bars[r.id]?.find((b) => b.t === r.t);
+      if (slot) slot.uptime = r.uptime;
+    }
+    res.json(bars);
+  });
+
+  /** Cortes de una web en el periodo pedido, con su causa y las visitas reales que fallaron. */
+  router.get('/:id/incidents', (req, res) => {
+    const row = getRow(Number(req.params.id));
+    if (!row) {
+      res.status(404).json({ error: 'Monitor no encontrado' });
+      return;
+    }
+    const since = Date.now() - HISTORY_RANGES[rangeOf(req.query.range)];
+    res.json(webHistory.incidents(row.id, since, hostOf(row)));
+  });
+
+  /** Tráfico real de la web (logs de Nginx Proxy Manager), agrupado igual que el historial. */
+  router.get('/:id/traffic', (req, res) => {
+    const row = getRow(Number(req.params.id));
+    const host = row ? hostOf(row) : null;
+    if (!row || !host) {
+      res.status(404).json({ error: 'Monitor no encontrado' });
+      return;
+    }
+    const span = HISTORY_RANGES[rangeOf(req.query.range)];
+    res.json(webHistory.traffic(host, Date.now() - span, Math.max(60_000, Math.floor(span / 96))));
   });
 
   /** Sigue ahora mismo la ruta de la web (DNS → servidor → certificado → NPM → contenedor → aplicación). */
@@ -478,6 +544,7 @@ export function createMonitorService(db: DB) {
 
   return {
     router,
+    webHistory,
     setDiagnoser(fn: (monitor: Monitor) => Promise<Diagnosis>) {
       diagnoser = fn;
     },

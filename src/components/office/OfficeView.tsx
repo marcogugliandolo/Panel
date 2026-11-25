@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronLeft, PanelRightClose, PanelRightOpen, Phone, Trash2, Waypoints } from 'lucide-react';
+import { ChevronLeft, PanelRightClose, PanelRightOpen, Phone, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { THRESHOLDS, type Monitor, type PortainerEndpoint, type PortainerStatus } from '../../../shared/types';
 import { api } from '../../api';
@@ -7,9 +7,7 @@ import { useStoredState } from '../../lib/hooks';
 import { emitOrder, newOrderId, onOrder } from '../../lib/orders';
 import { containerStateMeta, HEALTH_META, isContainerProblem, MONITOR_META, TONE_COLOR, type ServerView, type Tone } from '../../lib/status';
 import { cn } from '../../lib/utils';
-import { NpmDialog } from '../NpmDialog';
 import { ServerDetails } from '../server/ServerDrawer';
-import { RouteView } from './RouteView';
 import { Button, StatusBadge, useConfirm, useToast } from '../ui';
 import { createScene, lookFor, paintPortrait, RECEPTION_KEY, type FloorKey, type Scene, type SceneMode, type SceneNetDevice, type SceneServer } from './scene';
 
@@ -43,6 +41,10 @@ interface Props {
   selectedKey: string | null;
   onSelect: (key: string | null) => void;
   onFloor: (floor: FloorKey) => void;
+  /** Cambiar entre el plano de la oficina y el corte del edificio. */
+  onModeChange: (mode: SceneMode) => void;
+  /** Abrir una web en la sección Webs. */
+  onOpenWeb: (id: number) => void;
   onMonitorsChange: () => Promise<void>;
   portainer: PortainerStatus | null;
   endpoints: PortainerEndpoint[] | null;
@@ -114,6 +116,8 @@ export function OfficeView({
   selectedKey,
   onSelect,
   onFloor,
+  onModeChange,
+  onOpenWeb,
   onMonitorsChange,
   portainer,
   endpoints,
@@ -243,9 +247,25 @@ export function OfficeView({
     <div className="scrollbar-thin relative h-full overflow-y-auto">
       <div className={cn('of-main', compact && 'of-compact')}>
         <section className="of-stage" aria-labelledby="of-title">
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-line px-4 py-2.5">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-line px-4 py-2">
             <h2 id="of-title" className="text-sm font-semibold">{text.title}</h2>
-            <p className="text-[12.5px] text-ink-3">{text.hint}</p>
+            <p className="min-w-0 flex-1 text-[12.5px] text-ink-3">{text.hint}</p>
+            <div role="group" aria-label="Cómo ver la oficina" className="flex rounded-lg border border-line p-0.5">
+              {([['oficina', 'Plano'], ['edificio', 'Edificio']] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={mode === value}
+                  onClick={() => onModeChange(value)}
+                  className={cn(
+                    'rounded-md px-2.5 py-1 text-xs font-semibold transition-colors',
+                    mode === value ? 'bg-white/10 text-white' : 'text-ink-3 hover:text-ink',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
           <div ref={scrollRef} className="scrollbar-thin overflow-x-auto overflow-y-hidden">
             <div ref={worldRef} className="sc-world">
@@ -288,13 +308,7 @@ export function OfficeView({
               ))}
             </div>
           ) : selectedKey === RECEPTION_KEY ? (
-            <ReceptionPanel
-              monitors={monitors}
-              servers={servers.filter(inSchema).sort(byFloorAndName).map((s) => ({ serverId: s.serverId!, title: s.title }))}
-              onBack={() => onSelect(null)}
-              onChange={onMonitorsChange}
-              now={now}
-            />
+            <ReceptionPanel monitors={monitors} onBack={() => onSelect(null)} onChange={onMonitorsChange} onOpenWeb={onOpenWeb} now={now} />
           ) : selected ? (
             <div key={selected.key} className="space-y-4">
               <button type="button" onClick={() => onSelect(null)} className="inline-flex items-center gap-1 text-[12.5px] text-ink-2 hover:text-ink">
@@ -469,53 +483,22 @@ export function OfficeView({
   );
 }
 
-/** La recepción: los teléfonos son las webs vigiladas. Si una cae, sigue su ruta para ver dónde se rompe. */
+/** La recepción: los teléfonos son las webs vigiladas. Cada una se abre en la sección Webs. */
 function ReceptionPanel({
   monitors,
-  servers,
   onBack,
   onChange,
+  onOpenWeb,
   now,
 }: {
   monitors: Monitor[] | null;
-  servers: { serverId: string; title: string }[];
   onBack: () => void;
   onChange: () => Promise<void>;
+  onOpenWeb: (id: number) => void;
   now: number;
 }) {
   const [busy, setBusy] = useState<number | null>(null);
-  const [open, setOpen] = useState<number | null>(null);
-  const [tracing, setTracing] = useState<number | null>(null);
-  const [starting, setStarting] = useState(false);
-  const [npmOpen, setNpmOpen] = useState(false);
-  // Diagnósticos pedidos a mano (los de las caídas vienen ya en cada web).
-  const [manual, setManual] = useState<Record<number, Monitor['diagnosis']>>({});
   const toast = useToast();
-  const confirm = useConfirm();
-
-  async function forget(m: Monitor) {
-    const ok = await confirm({
-      title: `Dejar de vigilar ${m.name}`,
-      message: <p>Se borra su historial. Si viene de Nginx Proxy Manager, no se volverá a añadir sola.</p>,
-      confirmLabel: 'Dejar de vigilar',
-      danger: true,
-    });
-    if (!ok) return;
-    try {
-      await api.deleteMonitor(m.id);
-      toast(`${m.name} ya no se vigila`);
-      setOpen(null);
-      await onChange();
-    } catch (error) {
-      toast(error instanceof Error ? error.message : 'No se pudo quitar', 'bad');
-    }
-  }
-
-  // Las caídas se ven abiertas, para ver dónde fallan sin tocar nada.
-  const firstDown = (monitors ?? []).find((m) => m.status === 'down')?.id ?? null;
-  useEffect(() => {
-    if (open === null && firstDown !== null) setOpen(firstDown);
-  }, [firstDown, open]);
 
   async function check(m: Monitor) {
     setBusy(m.id);
@@ -537,35 +520,6 @@ function ReceptionPanel({
     }
   }
 
-  async function trace(m: Monitor) {
-    setTracing(m.id);
-    try {
-      const result = await api.diagnoseMonitor(m.id);
-      setManual((prev) => ({ ...prev, [m.id]: result.diagnosis }));
-      await onChange();
-    } catch (error) {
-      toast(error instanceof Error ? error.message : 'No se pudo seguir la ruta', 'bad');
-    } finally {
-      setTracing(null);
-    }
-  }
-
-  async function startContainer(m: Monitor, action: NonNullable<NonNullable<Monitor['diagnosis']>['action']>) {
-    setStarting(true);
-    try {
-      await api.containerAction(action.endpointId, action.container, 'start');
-      toast(`${action.container} arrancado en ${action.serverName}. Comprobando la web…`);
-      // Se deja unos segundos para que la aplicación arranque antes de volver a mirar.
-      await new Promise((r) => setTimeout(r, 6000));
-      await api.checkMonitor(m.id).catch(() => undefined);
-      await trace(m);
-    } catch (error) {
-      toast(error instanceof Error ? error.message : 'No se pudo arrancar', 'bad');
-    } finally {
-      setStarting(false);
-    }
-  }
-
   const sorted = [...(monitors ?? [])].sort((a, b) => Number(b.status === 'down') - Number(a.status === 'down'));
 
   return (
@@ -575,96 +529,51 @@ function ReceptionPanel({
       </button>
       <div className="flex items-center gap-3">
         <Portrait id={RECEPTION_KEY} size="lg" />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0">
           <h2 className="text-[15px] font-semibold">Recepción</h2>
-          <p className="mt-0.5 text-xs text-ink-3">Planta baja. Llama a cada web cada poco y, si una no contesta, sigue su ruta para ver dónde se cae.</p>
+          <p className="mt-0.5 text-xs text-ink-3">Planta baja. Llama a cada web cada poco. Pulsa una para ver su ruta, sus cortes y sus visitas.</p>
         </div>
       </div>
-      <button
-        type="button"
-        onClick={() => setNpmOpen(true)}
-        className="flex w-full items-center gap-2 rounded-[10px] border border-line px-3 py-2 text-left text-[12.5px] text-ink-2 transition-colors hover:border-line-strong hover:bg-white/[0.03] hover:text-ink"
-      >
-        <Waypoints size={14} className="shrink-0 text-ink-3" aria-hidden />
-        <span className="flex-1">Nginx Proxy Manager: tus webs y a qué contenedor va cada una</span>
-      </button>
       {monitors === null ? (
         <p className="text-sm text-ink-3">Cargando webs…</p>
       ) : monitors.length === 0 ? (
-        <p className="text-sm text-ink-3">No hay webs vigiladas. Conecta Nginx Proxy Manager para traerlas todas.</p>
+        <p className="text-sm text-ink-3">No hay webs vigiladas todavía.</p>
       ) : (
         <ul className="overflow-hidden rounded-[10px] border border-line">
           {sorted.map((m) => {
             const meta = MONITOR_META[m.status];
-            const diagnosis = manual[m.id] && (!m.diagnosis || (manual[m.id]?.at ?? 0) >= m.diagnosis.at) ? manual[m.id] : m.diagnosis;
-            const failing = m.status === 'down' && diagnosis && !diagnosis.ok ? diagnosis : null;
-            const expanded = open === m.id;
+            const failing = m.status === 'down' && m.diagnosis && !m.diagnosis.ok ? m.diagnosis : null;
             return (
-              <li key={m.id} className="border-t border-line first:border-t-0">
-                <div className="flex items-center gap-3 px-3 py-2.5">
-                  <button
-                    type="button"
-                    onClick={() => setOpen(expanded ? null : m.id)}
-                    aria-expanded={expanded}
-                    className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                  >
-                    <Phone size={14} className={cn('shrink-0', m.status === 'down' ? 'text-bad' : 'text-ink-3')} aria-hidden />
-                    <span className="min-w-0 flex-1">
-                      <span className="flex flex-wrap items-center gap-2">
-                        <span className="truncate text-[13px] font-medium">{m.name}</span>
-                        <StatusBadge tone={meta.tone} label={meta.label} />
-                      </span>
-                      {failing ? (
-                        <span className="block truncate text-[11.5px] font-medium text-bad">{failing.title}</span>
-                      ) : (
-                        <span className="block truncate font-mono text-[11px] text-ink-3">
-                          {m.lastCheck ? `${formatMs(m.lastCheck.latencyMs)} · ${formatPercent(m.uptime24h, 1)} hoy · ${timeAgo(m.lastCheck.ts, now)}` : 'Pendiente de la primera comprobación'}
-                        </span>
-                      )}
+              <li key={m.id} className="flex items-center gap-3 border-t border-line px-3 py-2.5 first:border-t-0">
+                <button type="button" onClick={() => onOpenWeb(m.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+                  <Phone size={14} className={cn('shrink-0', m.status === 'down' ? 'text-bad' : 'text-ink-3')} aria-hidden />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="truncate text-[13px] font-medium hover:underline">{m.name}</span>
+                      <StatusBadge tone={meta.tone} label={meta.label} />
                     </span>
-                    <ChevronDown size={14} className={cn('shrink-0 text-ink-3 transition-transform', expanded && 'rotate-180')} aria-hidden />
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy !== null}
-                    onClick={() => check(m)}
-                    className="shrink-0 rounded-[7px] border border-line-strong bg-surface-2 px-2.5 py-1 text-xs font-medium transition-colors hover:bg-surface-3 disabled:opacity-40"
-                  >
-                    {busy === m.id ? 'Llamando…' : 'Comprobar'}
-                  </button>
-                </div>
-                {expanded && (
-                  <div className="border-t border-line bg-bg/40 px-3 py-3">
-                    {diagnosis ? (
-                      <RouteView
-                        diagnosis={diagnosis}
-                        busy={tracing === m.id}
-                        onRetry={() => trace(m)}
-                        onAction={diagnosis.action ? () => startContainer(m, diagnosis.action!) : undefined}
-                        actionBusy={starting}
-                        now={now}
-                      />
+                    {failing ? (
+                      <span className="block truncate text-[11.5px] font-medium text-bad">{failing.title}</span>
                     ) : (
-                      <div className="space-y-2 text-[12.5px] text-ink-3">
-                        <p>Sigue el camino de una visita (DNS, servidor, certificado, Nginx Proxy Manager, contenedor y aplicación) para ver si todo responde.</p>
-                        <Button size="sm" loading={tracing === m.id} icon={<Waypoints size={13} aria-hidden />} onClick={() => trace(m)}>
-                          Seguir la ruta
-                        </Button>
-                      </div>
+                      <span className="block truncate font-mono text-[11px] text-ink-3">
+                        {m.lastCheck ? `${formatMs(m.lastCheck.latencyMs)} · ${formatPercent(m.uptime24h, 1)} hoy · ${timeAgo(m.lastCheck.ts, now)}` : 'Pendiente de la primera comprobación'}
+                      </span>
                     )}
-                    <div className="mt-3 flex justify-end border-t border-line pt-2">
-                      <button type="button" onClick={() => forget(m)} className="inline-flex items-center gap-1 text-[11.5px] text-ink-3 hover:text-bad">
-                        <Trash2 size={12} aria-hidden /> Dejar de vigilar
-                      </button>
-                    </div>
-                  </div>
-                )}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => check(m)}
+                  className="shrink-0 rounded-[7px] border border-line-strong bg-surface-2 px-2.5 py-1 text-xs font-medium transition-colors hover:bg-surface-3 disabled:opacity-40"
+                >
+                  {busy === m.id ? 'Llamando…' : 'Comprobar'}
+                </button>
               </li>
             );
           })}
         </ul>
       )}
-      <NpmDialog open={npmOpen} onClose={() => setNpmOpen(false)} servers={servers} onImported={() => void onChange()} />
     </div>
   );
 }

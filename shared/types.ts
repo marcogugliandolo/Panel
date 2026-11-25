@@ -214,3 +214,38 @@ export interface MonitorHistory {
   points: MonitorHistoryPoint[];
   failures: MonitorCheck[];
 }
+
+/** Un corte de una web: desde el primer fallo confirmado hasta que vuelve a responder. */
+export interface WebIncident {
+  id: number;
+  startedAt: number;
+  /** null mientras siga caída. */
+  endedAt: number | null;
+  durationMs: number;
+  /** Lo que devolvió la comprobación (p. ej. «Respuesta HTTP 502»). */
+  error: string | null;
+  /** Dónde falló, según el diagnóstico de la ruta hecho durante el corte. */
+  cause: { title: string; summary: string; failedAt: RouteStepId | null } | null;
+  /** Visitas reales que fallaron durante el corte (logs de NPM), si se tienen. */
+  failedVisits: number | null;
+}
+
+/** Tráfico real de una web leído de los logs de Nginx Proxy Manager. */
+export interface WebTrafficPoint {
+  t: number;
+  requests: number;
+  /** Respuestas 5xx (errores del servidor o de la aplicación). */
+  failed: number;
+  /** 502/503/504: NPM no pudo hablar con el contenedor. */
+  gateway: number;
+}
+export interface WebTraffic {
+  bucketMs: number;
+  points: WebTrafficPoint[];
+  totals: { requests: number; failed: number; gateway: number };
+  /** Último minuto con datos de esta web (null si nunca han llegado). */
+  lastAt: number | null;
+}
+
+/** Minibarras de las últimas 24 h de todas las webs (una por hora). */
+export type WebBars = Record<number, { t: number; uptime: number | null }[]>;

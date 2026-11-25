@@ -2,6 +2,7 @@ import express from 'express';
 import type { ContainerInfo, DetectedNpmHost, HistoryRange, MetricPoint, ServerStats } from '../../shared/types';
 import { config } from '../config';
 import type { DB } from '../db';
+import { parseNginxMinute, type TrafficSample } from '../incidents';
 
 const SERVER_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 const METRIC_INTERVAL_MS = 55_000; // como mucho un punto de historial por minuto y servidor
@@ -180,7 +181,23 @@ function rowToStats(row: StatsRow, now: number): ServerStats {
 }
 
 /** POST /api/stats/:id — lo usan los scripts de cada servidor (protegido con STATS_TOKEN, no con sesión). */
-export function createIngestHandler(db: DB): express.RequestHandler {
+/** Visitas por dominio y minuto que el script lee de los logs de Nginx Proxy Manager. */
+function toTraffic(value: unknown): TrafficSample[] {
+  if (!Array.isArray(value)) return [];
+  const out: TrafficSample[] = [];
+  for (const raw of value.slice(0, 5000)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const r = raw as Record<string, unknown>;
+    const host = String(r.host ?? '').toLowerCase();
+    const minute = parseNginxMinute(String(r.m ?? ''));
+    const n = (v: unknown) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.min(1_000_000, Math.round(Number(v))) : 0);
+    if (!/^[a-z0-9.-]{1,253}$/.test(host) || minute === null) continue;
+    out.push({ host, minute, requests: n(r.n), failed: n(r.e5), gateway: n(r.gw) });
+  }
+  return out;
+}
+
+export function createIngestHandler(db: DB, onTraffic?: (samples: TrafficSample[]) => void): express.RequestHandler {
   const lastMetricAt = new Map<string, number>();
 
   const upsert = db.prepare(`
@@ -247,6 +264,7 @@ export function createIngestHandler(db: DB): express.RequestHandler {
       lastMetricAt.set(serverId, now);
     }
 
+    if (onTraffic && Array.isArray(body.npmTraffic)) onTraffic(toTraffic(body.npmTraffic));
     res.json({ success: true });
   };
 }

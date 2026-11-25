@@ -49,6 +49,7 @@ json_str() {
 leer_npm() {
   NPM_FOUND=""
   NPM_JSON=""
+  NPM_SRC=""
   command -v docker > /dev/null 2>&1 || return 0
   local id src stream
   id=$(docker ps -a --format '{{.ID}}|{{.Image}}|{{.Names}}' 2>/dev/null |
@@ -56,6 +57,7 @@ leer_npm() {
   [ -n "$id" ] || return 0
   src=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$id" 2>/dev/null)
   if [ -n "$src" ] && [ -d "$src/nginx/proxy_host" ]; then
+    NPM_SRC="$src"
     stream=$(for f in "$src"/nginx/proxy_host/*.conf "$src"/nginx/proxy_host/*.conf.err; do
       [ -f "$f" ] && { echo "### $f"; cat "$f"; }
     done)
@@ -80,6 +82,60 @@ leer_npm() {
     /^[ \t]*listen[ \t].*443/ { ssl = 1 }
     END { out(); print all }
   ')
+}
+
+# Tráfico real de las webs: los access logs de NPM (/data/logs/proxy-host-N_access.log).
+# Se leen solo las líneas nuevas desde el último envío (se guarda hasta dónde se leyó) y se mandan
+# las visitas por dominio y minuto, con cuántas fallaron (5xx) y cuántas eran de pasarela (502/503/504).
+leer_trafico_npm() {
+  NPM_TRAFFIC=""
+  [ -n "$NPM_SRC" ] && [ -d "$NPM_SRC/logs" ] || return 0
+  local dir="${STATE_DIR:-/var/lib/server-panel}" state new tmp f size inode prev off
+  mkdir -p "$dir" 2> /dev/null || return 0
+  state="$dir/npm-logs.state"
+  new="$state.$$"
+  tmp=$(mktemp) || return 0
+  touch "$state" 2> /dev/null || return 0
+  : > "$new"
+  for f in "$NPM_SRC"/logs/proxy-host-*_access.log; do
+    [ -f "$f" ] || continue
+    size=$(stat -c %s "$f" 2> /dev/null) || continue
+    inode=$(stat -c %i "$f" 2> /dev/null)
+    prev=$(awk -v f="$f" '$1 == f { print $2 " " $3; exit }' "$state")
+    off=${prev#* }
+    if [ -z "$prev" ]; then
+      # Primera vez: se empieza por el último mega para no mandar todo el histórico.
+      off=$((size > 1048576 ? size - 1048576 : 0))
+    elif [ "${prev%% *}" != "$inode" ] || [ "$off" -gt "$size" ]; then
+      off=0 # el log se ha rotado
+    fi
+    [ "$size" -gt "$off" ] && tail -c +$((off + 1)) "$f" 2> /dev/null | head -c 4194304 >> "$tmp"
+    echo "$f $inode $size" >> "$new"
+  done
+  # Formato de NPM: [25/Nov/2026:10:15:32 +0000] - 502 502 - GET https dominio "/ruta" [Client …] …
+  NPM_TRAFFIC=$(awk '
+    substr($0, 1, 1) == "[" {
+      rb = index($0, "]"); t = substr($0, 2, rb - 2)
+      rest = substr($0, rb + 2); p = index(rest, " - "); if (!p) next
+      nb = split(substr(rest, 1, p - 1), b, " "); status = b[nb]
+      split(substr(rest, p + 3), a, " "); host = tolower(a[3])
+      if (host !~ /^[a-z0-9.-]+$/ || length(t) < 26) next
+      k = host "|" substr(t, 1, 17) " " substr(t, 22, 5)
+      n[k]++
+      if (status ~ /^5/) e5[k]++
+      if (status == "502" || status == "503" || status == "504") gw[k]++
+    }
+    END {
+      out = ""
+      for (k in n) {
+        split(k, kk, "|")
+        out = out (out == "" ? "" : ",") "{\"host\":\"" kk[1] "\",\"m\":\"" kk[2] "\",\"n\":" n[k] ",\"e5\":" (e5[k] + 0) ",\"gw\":" (gw[k] + 0) "}"
+      }
+      print out
+    }' "$tmp")
+  rm -f "$tmp"
+  # En pruebas (DRY_RUN) no se avanza: así se puede repetir.
+  if [ -n "${DRY_RUN:-}" ]; then rm -f "$new"; else mv "$new" "$state"; fi
 }
 
 enviar() {
@@ -154,8 +210,10 @@ enviar() {
   done
 
   leer_npm
+  leer_trafico_npm
   NPM_PART=""
   [ -n "$NPM_FOUND" ] && NPM_PART=",\"npm\":[${NPM_JSON}]"
+  [ -n "$NPM_TRAFFIC" ] && NPM_PART="${NPM_PART},\"npmTraffic\":[${NPM_TRAFFIC}]"
 
   PAYLOAD="{\"cpu\":${CPU},\"ram\":${RAM},\"disk\":${DISK},\"uptime\":${UPTIME},\"hostname\":\"$(json_str "$HOST")\",\"ips\":[${IPS}],\"containers\":[${CONTAINERS}]${NPM_PART}}"
 
