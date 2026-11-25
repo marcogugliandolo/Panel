@@ -155,14 +155,30 @@ export interface DiscoveryState {
   candidates: DiscoveryCandidate[];
 }
 
-/** «Solo las webs de Nginx Proxy Manager». */
+/** Una web apartada: no funciona (o está mal en NPM) y se vuelve a probar cada 10 minutos. */
+export interface DormantWeb {
+  host: string;
+  name: string;
+  url: string;
+  /** never: no ha respondido nunca · down: lleva un día sin responder · npm: desactivada o con error en NPM */
+  reason: 'never' | 'down' | 'npm';
+  since: number;
+  lastOk: number | null;
+  lastProbe: number | null;
+  lastError: string | null;
+}
+
+/** Qué webs se vigilan: «solo las de Nginx Proxy Manager» y «solo las que funcionan». */
 export interface WebScope {
   npmOnly: boolean;
-  /** false mientras no se sepa nada de ningún NPM (no se quita nada). */
+  onlyWorking: boolean;
+  /** false mientras no se sepa nada de ningún NPM (no se quita nada por NPM). */
   ready: boolean;
   /** Webs vigiladas que no están en ningún NPM. */
   outside: { id: number; name: string; url: string }[];
   lastPruned: { at: number; names: string[] } | null;
+  lastRestored: { at: number; names: string[] } | null;
+  dormant: DormantWeb[];
 }
 
 export interface TwoFactorStatus {
@@ -246,8 +262,10 @@ export const api = {
     request<NpmDetected>(`/npm/detected/${enc(serverId)}`, { method: 'PUT', body: { autoImport } }),
   webBars: () => request<WebBars>('/monitors/bars'),
   webScope: () => request<WebScope>('/webs/scope'),
-  webScopeSet: (npmOnly: boolean) => request<WebScope>('/webs/scope', { method: 'PUT', body: { npmOnly } }),
-  webScopePrune: () => request<WebScope & { removed: string[] }>('/webs/scope/prune', { method: 'POST' }),
+  webScopeSet: (body: { npmOnly?: boolean; onlyWorking?: boolean }) => request<WebScope>('/webs/scope', { method: 'PUT', body }),
+  webScopePrune: () => request<WebScope & { removed: string[]; setAside: string[] }>('/webs/scope/prune', { method: 'POST' }),
+  webScopeRecheck: () => request<WebScope & { back: string[] }>('/webs/scope/recheck', { method: 'POST' }),
+  webScopeKeep: (host: string) => request<WebScope>('/webs/scope/keep', { method: 'POST', body: { host } }),
   discovery: () => request<DiscoveryState>('/discovery'),
   discoveryRun: () => request<DiscoveryState>('/discovery/run', { method: 'POST' }),
   discoveryWatch: (hosts: string[]) => request<DiscoveryState & { added: string[] }>('/discovery/watch', { method: 'POST', body: { hosts } }),

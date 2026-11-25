@@ -140,6 +140,22 @@ const DEFAULT_WEBS: [string, string][] = [
   ['portainer.marcogugliandolo.com', 'https://portainer.marcogugliandolo.com'],
 ];
 
+/** ¿Responde bien esta URL ahora mismo? (mismo criterio que las comprobaciones: 2xx o 3xx) */
+export async function probeUrl(url: string, timeoutMs = 10_000): Promise<{ ok: boolean; status: number | null; error: string | null }> {
+  try {
+    const response = await fetch(url, {
+      redirect: 'follow',
+      headers: { 'User-Agent': USER_AGENT, Accept: 'text/html,application/json;q=0.9,*/*;q=0.8' },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    await response.body?.cancel().catch(() => undefined);
+    const ok = response.status >= 200 && response.status < 400;
+    return { ok, status: response.status, error: ok ? null : `Respuesta HTTP ${response.status}` };
+  } catch (caught) {
+    return { ok: false, status: null, error: describeError(caught, timeoutMs) };
+  }
+}
+
 export function createMonitorService(db: DB) {
   for (const [column, type] of [['diagnosis', 'TEXT']] as const) {
     const has = (db.prepare('PRAGMA table_info(monitors)').all() as { name: string }[]).some((c) => c.name === column);

@@ -1,7 +1,7 @@
-import { ChevronLeft, ExternalLink, Filter, Play, RefreshCw, Search, Trash2, Waypoints, X } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ExternalLink, Filter, MoonStar, Play, RefreshCw, Search, Trash2, Undo2, Waypoints, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HistoryRange, Monitor, MonitorHistoryPoint, WebIncident, WebTrafficPoint } from '../../../shared/types';
-import { api, type DiscoveryState } from '../../api';
+import { api, type DiscoveryState, type DormantWeb } from '../../api';
 import { formatDateTime, formatMs, formatNumber, formatPercent, formatTime, timeAgo } from '../../lib/format';
 import { useMediaQuery, usePolling, useStoredState, useWidth } from '../../lib/hooks';
 import { MONITOR_META } from '../../lib/status';
@@ -87,7 +87,41 @@ export function WebsView({
   const confirm = useConfirm();
   const toast = useToast();
   const [seenPruned, setSeenPruned] = useStoredState<number>('panel:webs-quitadas-vistas', 0);
+  const [seenRestored, setSeenRestored] = useStoredState<number>('panel:webs-vuelven-vistas', 0);
+  const [asideOpen, setAsideOpen] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
   const npmOnly = scope.data?.npmOnly ?? true;
+  const onlyWorking = scope.data?.onlyWorking ?? true;
+  const dormant = scope.data?.dormant ?? [];
+  const lastRestored =
+    scope.data?.lastRestored && scope.data.lastRestored.at > seenRestored && now - scope.data.lastRestored.at < 7 * 86_400_000 ? scope.data.lastRestored : null;
+  async function refreshAll() {
+    await onChange();
+    void bars.refresh();
+    void discovery.refresh();
+  }
+  async function setOnlyWorking(on: boolean) {
+    const st = await api.webScopeSet({ onlyWorking: on });
+    scope.setData(st);
+    await refreshAll();
+  }
+  async function keep(w: DormantWeb) {
+    scope.setData(await api.webScopeKeep(w.host));
+    toast(`${w.name} vuelve a vigilarse y no se apartará`);
+    await refreshAll();
+  }
+  async function recheckAside() {
+    setRechecking(true);
+    try {
+      const st = await api.webScopeRecheck();
+      scope.setData(st);
+      toast(st.back.length ? `Vuelven ${st.back.length}: ${st.back.join(', ')}` : 'Siguen sin responder');
+      if (st.back.length) setSeenRestored(st.lastRestored?.at ?? Date.now());
+      await refreshAll();
+    } finally {
+      setRechecking(false);
+    }
+  }
   const outside = scope.data?.ready ? scope.data.outside : [];
   const lastPruned = scope.data?.lastPruned && scope.data.lastPruned.at > seenPruned && now - scope.data.lastPruned.at < 7 * 86_400_000 ? scope.data.lastPruned : null;
   const listNames = (names: string[]) => (
@@ -115,7 +149,7 @@ export function WebsView({
       });
       if (!ok) return;
     }
-    const st = await api.webScopeSet(on);
+    const st = await api.webScopeSet({ npmOnly: on });
     scope.setData(st);
     if (on && outside.length) {
       setSeenPruned(st.lastPruned?.at ?? Date.now());
@@ -125,12 +159,12 @@ export function WebsView({
     void bars.refresh();
     void discovery.refresh();
   }
-  // Si el panel ha quitado webs (porque se borraron de NPM), la lista se actualiza.
-  const prunedAt = scope.data?.lastPruned?.at ?? 0;
+  // Si el panel ha quitado, apartado o recuperado webs por su cuenta, la lista se actualiza.
+  const changeKey = `${scope.data?.lastPruned?.at ?? 0}|${scope.data?.lastRestored?.at ?? 0}|${dormant.length}`;
   useEffect(() => {
-    if (prunedAt) void onChange();
+    if (scope.data) void onChange();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prunedAt]);
+  }, [changeKey]);
   const sorted = useMemo(
     () => [...(monitors ?? [])].sort((a, b) => Number(b.status === 'down') - Number(a.status === 'down') || a.name.localeCompare(b.name)),
     [monitors],
@@ -173,6 +207,21 @@ export function WebsView({
                 <span className="mt-0.5 block break-words text-ink-3">{lastPruned.names.join(', ')}</span>
               </p>
               <button type="button" aria-label="Cerrar aviso" onClick={() => setSeenPruned(lastPruned.at)} className="-m-1 rounded p-1 text-ink-3 hover:bg-white/5 hover:text-ink">
+                <X size={13} aria-hidden />
+              </button>
+            </div>
+          )}
+          {lastRestored && (
+            <div className="flex items-start gap-2.5 rounded-[12px] border border-ok/25 bg-ok/[0.05] px-3 py-2.5">
+              <Undo2 size={14} className="mt-0.5 shrink-0 text-ok" aria-hidden />
+              <p className="min-w-0 flex-1 text-[12px] text-ink-2">
+                <span className="font-medium text-ink">
+                  {lastRestored.names.length === 1 ? 'Vuelve a responder 1 web apartada' : `Vuelven a responder ${lastRestored.names.length} webs apartadas`}
+                </span>{' '}
+                <span className="text-ink-3">· {timeAgo(lastRestored.at, now)}</span>
+                <span className="mt-0.5 block break-words text-ink-3">{lastRestored.names.join(', ')}</span>
+              </p>
+              <button type="button" aria-label="Cerrar aviso" onClick={() => setSeenRestored(lastRestored.at)} className="-m-1 rounded p-1 text-ink-3 hover:bg-white/5 hover:text-ink">
                 <X size={13} aria-hidden />
               </button>
             </div>
@@ -252,6 +301,57 @@ export function WebsView({
               );
             })}
           </ul>
+          {dormant.length > 0 && (
+            <div className="overflow-hidden rounded-[12px] border border-line">
+              <button
+                type="button"
+                onClick={() => setAsideOpen((v) => !v)}
+                aria-expanded={asideOpen}
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-[12.5px] text-ink-2 transition-colors hover:bg-white/[0.03] hover:text-ink"
+              >
+                <MoonStar size={14} className="shrink-0 text-ink-3" aria-hidden />
+                <span className="flex-1">
+                  {dormant.length === 1 ? '1 web apartada' : `${dormant.length} webs apartadas`}{' '}
+                  <span className="text-ink-3">· no {dormant.length === 1 ? 'funciona' : 'funcionan'}</span>
+                </span>
+                <ChevronDown size={14} className={cn('shrink-0 text-ink-3 transition-transform', asideOpen && 'rotate-180')} aria-hidden />
+              </button>
+              {asideOpen && (
+                <div className="border-t border-line">
+                  <p className="px-3 pt-2.5 text-[11.5px] text-ink-3">Se vuelven a probar cada 10 minutos y vuelven solas a la lista en cuanto responden.</p>
+                  <ul className="divide-y divide-line">
+                    {dormant.map((w) => (
+                      <li key={w.host} className="flex items-start gap-2 px-3 py-2.5">
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] text-ink-2">{w.name}</span>
+                          <span className="block text-[11.5px] text-ink-3">
+                            {w.reason === 'npm'
+                              ? 'Desactivada o con error en NPM'
+                              : w.reason === 'never'
+                                ? 'No ha respondido nunca'
+                                : `Sin responder desde ${w.lastOk ? timeAgo(w.lastOk, now) : 'hace más de un día'}`}
+                            {w.lastProbe ? ` · probada ${timeAgo(w.lastProbe, now)}` : ''}
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void keep(w)}
+                          className="shrink-0 rounded-md px-2 py-1 text-[11.5px] text-ink-3 transition-colors hover:bg-white/5 hover:text-ink"
+                        >
+                          Vigilar igualmente
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="border-t border-line px-3 py-2">
+                    <Button size="sm" variant="ghost" loading={rechecking} onClick={() => void recheckAside()}>
+                      <RefreshCw size={13} aria-hidden /> Probarlas ahora
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           <button
             type="button"
             onClick={() => setNpmOpen(true)}
@@ -276,6 +376,24 @@ export function WebsView({
                       ? 'Las que borres de NPM dejan de vigilarse solas.'
                       : 'Aún no llegan los datos de NPM: no se quita nada hasta entonces.'
                     : 'Desactivado: puedes vigilar webs que no estén en NPM y buscarlas en tus certificados.'}
+                </span>
+              </span>
+            </label>
+          )}
+          {scope.data && (
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-[10px] px-1 py-1 text-[12.5px]">
+              <input
+                type="checkbox"
+                checked={onlyWorking}
+                onChange={(e) => void setOnlyWorking(e.target.checked)}
+                className="mt-0.5 size-4 shrink-0 accent-[var(--color-accent)]"
+              />
+              <span>
+                <span className="block text-ink-2">Solo las webs que funcionan</span>
+                <span className="block text-[11.5px] text-ink-3">
+                  {onlyWorking
+                    ? 'Se apartan las que no han respondido nunca o llevan un día caídas. Si una que funciona se cae, se queda y te avisa.'
+                    : 'Desactivado: se vigilan todas, respondan o no.'}
                 </span>
               </span>
             </label>
