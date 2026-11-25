@@ -134,6 +134,25 @@ export interface NpmHost {
   importable: string[];
 }
 
+export interface DiscoveryCandidate {
+  host: string;
+  source: 'certificados' | 'npm';
+  resolves: boolean;
+  responds: boolean;
+  status: number | null;
+  certAt: number | null;
+  checkedAt: number;
+}
+export interface DiscoveryState {
+  running: boolean;
+  lastRun: number | null;
+  lastError: string | null;
+  sources: string[];
+  domains: string[];
+  extraDomains: string[];
+  candidates: DiscoveryCandidate[];
+}
+
 export interface TwoFactorStatus {
   enabled: boolean;
   enabledAt: number | null;
@@ -214,6 +233,11 @@ export const api = {
   npmDetectedAuto: (serverId: string, autoImport: boolean) =>
     request<NpmDetected>(`/npm/detected/${enc(serverId)}`, { method: 'PUT', body: { autoImport } }),
   webBars: () => request<WebBars>('/monitors/bars'),
+  discovery: () => request<DiscoveryState>('/discovery'),
+  discoveryRun: () => request<DiscoveryState>('/discovery/run', { method: 'POST' }),
+  discoveryWatch: (hosts: string[]) => request<DiscoveryState & { added: string[] }>('/discovery/watch', { method: 'POST', body: { hosts } }),
+  discoveryDismiss: (hosts: string[]) => request<DiscoveryState>('/discovery/dismiss', { method: 'POST', body: { hosts } }),
+  discoveryDomains: (domains: string[]) => request<DiscoveryState>('/discovery/domains', { method: 'PUT', body: { domains } }),
   webIncidents: (id: number, range: HistoryRange) => request<WebIncident[]>(`/monitors/${id}/incidents?range=${range}`),
   webTraffic: (id: number, range: HistoryRange) => request<WebTraffic>(`/monitors/${id}/traffic?range=${range}`),
   monitorHistory: (id: number, range: HistoryRange) =>

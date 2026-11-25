@@ -51,11 +51,22 @@ leer_npm() {
   NPM_JSON=""
   NPM_SRC=""
   command -v docker > /dev/null 2>&1 || return 0
-  local id src stream
-  id=$(docker ps -a --format '{{.ID}}|{{.Image}}|{{.Names}}' 2>/dev/null |
-    awk -F'|' 'tolower($2 " " $3) ~ /nginx-proxy-manager/ { print $1; exit }')
+  local id="" src="" stream line cid csrc
+  # NPM se reconoce por lo que es (un contenedor con /data/nginx/proxy_host), no por el nombre de su imagen:
+  # vale para jc21/nginx-proxy-manager, NPMplus, imágenes propias…
+  while IFS='|' read -r cid csrc; do
+    if [ -n "$csrc" ] && [ -d "$csrc/nginx/proxy_host" ]; then
+      id="$cid"
+      src="$csrc"
+      break
+    fi
+  done < <(docker inspect -f '{{.Id}}|{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' $(docker ps -aq 2> /dev/null) 2> /dev/null)
+  # Si la carpeta no se ve desde fuera, se busca por el nombre de la imagen y se lee desde dentro del contenedor.
+  if [ -z "$id" ]; then
+    id=$(docker ps -a --format '{{.ID}}|{{.Image}}|{{.Names}}' 2> /dev/null |
+      awk -F'|' 'tolower($2 " " $3) ~ /nginx-proxy-manager|npmplus|nginxproxymanager/ { print $1; exit }')
+  fi
   [ -n "$id" ] || return 0
-  src=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$id" 2>/dev/null)
   if [ -n "$src" ] && [ -d "$src/nginx/proxy_host" ]; then
     NPM_SRC="$src"
     stream=$(for f in "$src"/nginx/proxy_host/*.conf "$src"/nginx/proxy_host/*.conf.err; do

@@ -119,6 +119,7 @@
 }
 
 .sc-world { position: relative; width: 100%; min-width: 780px; aspect-ratio: 640 / 352; }
+@media (max-width: 640px) { .sc-world { min-width: 600px; } }
 .sc-world canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .sc-world::after { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; box-shadow: inset 0 0 90px rgb(0 0 0 / 0.5); }
 .sc-overlay { position: absolute; inset: 0; z-index: 2; pointer-events: none; }

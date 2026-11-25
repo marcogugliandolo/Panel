@@ -1,13 +1,14 @@
-import { ExternalLink, Play, RefreshCw, Trash2, Waypoints } from 'lucide-react';
+import { ChevronLeft, ExternalLink, Play, RefreshCw, Search, Trash2, Waypoints } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HistoryRange, Monitor, MonitorHistoryPoint, WebIncident, WebTrafficPoint } from '../../../shared/types';
-import { api } from '../../api';
+import { api, type DiscoveryState } from '../../api';
 import { formatDateTime, formatMs, formatNumber, formatPercent, formatTime, timeAgo } from '../../lib/format';
-import { usePolling } from '../../lib/hooks';
+import { useMediaQuery, usePolling, useWidth } from '../../lib/hooks';
 import { MONITOR_META } from '../../lib/status';
 import { cn } from '../../lib/utils';
 import { NpmDialog } from '../NpmDialog';
 import { Button, StatusBadge, useConfirm, useToast } from '../ui';
+import { DiscoveryDialog } from './DiscoveryDialog';
 import { RouteAnimation, type NodeId } from './RouteAnimation';
 
 const RANGES: { value: HistoryRange; label: string }[] = [
@@ -38,6 +39,14 @@ function uptimeTone(uptime: number | null, hadOutage?: boolean): string {
   return 'bg-warn/80';
 }
 
+/** Tooltip sobre la barra, sin salirse por los lados: en los extremos se ancla al borde. */
+function tooltipPos(index: number, count: number): React.CSSProperties {
+  const pct = ((index + 0.5) / count) * 100;
+  if (pct < 18) return { left: 0 };
+  if (pct > 82) return { right: 0 };
+  return { left: `${pct}%`, transform: 'translate(-50%, -100%)' };
+}
+
 /** La sección Webs: elegir una web y ver su ruta, sus cortes y sus visitas reales. */
 export function WebsView({
   monitors,
@@ -56,23 +65,47 @@ export function WebsView({
 }) {
   const bars = usePolling(() => api.webBars(), 60_000);
   const [npmOpen, setNpmOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const discovery = usePolling(() => api.discovery(), 60_000);
+  // Mientras busca, se pregunta más a menudo.
+  useEffect(() => {
+    if (!discovery.data?.running) return;
+    const t = window.setInterval(() => void discovery.refresh(), 3000);
+    return () => window.clearInterval(t);
+  }, [discovery.data?.running, discovery]);
+  const wide = useMediaQuery('(min-width: 1024px)');
+  // En móvil, la lista y la ficha son dos pantallas: «showDetail» dice cuál se ve.
+  const [showDetail, setShowDetail] = useState(false);
+  const open = (id: number) => {
+    onSelect(id);
+    setShowDetail(true);
+    window.scrollTo?.({ top: 0 });
+  };
+  const notWatched = (discovery.data?.candidates ?? []).filter((c) => c.responds).length;
   const sorted = useMemo(
     () => [...(monitors ?? [])].sort((a, b) => Number(b.status === 'down') - Number(a.status === 'down') || a.name.localeCompare(b.name)),
     [monitors],
   );
   const selected = sorted.find((m) => m.id === selectedId) ?? null;
 
-  // Sin web elegida, se abre la primera (la caída, si la hay).
+  // En pantalla ancha, sin web elegida se abre la primera (la caída, si la hay).
   useEffect(() => {
-    if (!selected && sorted.length) onSelect(sorted[0].id);
-  }, [selected, sorted, onSelect]);
+    if (wide && !selected && sorted.length) onSelect(sorted[0].id);
+  }, [wide, selected, sorted, onSelect]);
+  // Si se llega con una web ya elegida (desde la campana o la recepción), en móvil se abre su ficha.
+  useEffect(() => {
+    if (selectedId !== null) setShowDetail(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const detailVisible = wide || (showDetail && selected !== null);
+  const listVisible = wide || !detailVisible;
 
   const down = sorted.filter((m) => m.status === 'down').length;
 
   return (
     <div className="scrollbar-thin h-full overflow-y-auto">
-      <div className="mx-auto grid max-w-[1500px] gap-4 p-4 lg:grid-cols-[320px_minmax(0,1fr)] lg:p-6">
-        <aside className="space-y-3 lg:sticky lg:top-0 lg:self-start">
+      <div className="mx-auto grid max-w-[1500px] gap-4 p-3 sm:p-4 lg:grid-cols-[320px_minmax(0,1fr)] lg:p-6">
+        <aside className="space-y-3 lg:sticky lg:top-0 lg:self-start" hidden={!listVisible}>
           <div className="flex items-baseline justify-between gap-2">
             <h2 className="text-sm font-semibold">Webs</h2>
             <span className="text-xs text-ink-3">
@@ -80,6 +113,31 @@ export function WebsView({
               {down > 0 && <span className="text-bad">{down} caídas</span>}
             </span>
           </div>
+          {notWatched > 0 ? (
+            <button
+              type="button"
+              onClick={() => setFindOpen(true)}
+              className="flex w-full items-center gap-2.5 rounded-[12px] border border-accent/30 bg-accent/[0.07] px-3 py-2.5 text-left transition-colors hover:bg-accent/[0.11]"
+            >
+              <Search size={15} className="shrink-0 text-accent" aria-hidden />
+              <span className="min-w-0 flex-1">
+                <span className="block text-[13px] font-medium text-ink">
+                  {notWatched} {notWatched === 1 ? 'web tuya sin vigilar' : 'webs tuyas sin vigilar'}
+                </span>
+                <span className="block text-[11.5px] text-ink-3">Encontradas en tus certificados y en NPM · Revisar</span>
+              </span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setFindOpen(true)}
+              className="flex w-full items-center gap-2 rounded-[10px] border border-line px-3 py-2 text-left text-[12.5px] text-ink-2 transition-colors hover:border-line-strong hover:bg-white/[0.03] hover:text-ink"
+            >
+              <Search size={14} className={cn('shrink-0 text-ink-3', discovery.data?.running && 'animate-pulse')} aria-hidden />
+              <span className="flex-1">{discovery.data?.running ? 'Buscando tus webs…' : 'Buscar todas tus webs'}</span>
+              {discovery.data?.lastRun && <span className="text-[11px] text-ink-3">{timeAgo(discovery.data.lastRun, now)}</span>}
+            </button>
+          )}
           <ul className="overflow-hidden rounded-[12px] border border-line bg-surface">
             {monitors === null && <li className="px-3 py-3 text-sm text-ink-3">Cargando…</li>}
             {monitors?.length === 0 && <li className="px-3 py-3 text-sm text-ink-3">Aún no hay webs vigiladas.</li>}
@@ -91,9 +149,9 @@ export function WebsView({
                 <li key={m.id} className="border-t border-line first:border-t-0">
                   <button
                     type="button"
-                    onClick={() => onSelect(m.id)}
-                    aria-current={active || undefined}
-                    className={cn('w-full px-3 py-2.5 text-left transition-colors', active ? 'bg-white/[0.06]' : 'hover:bg-white/[0.03]')}
+                    onClick={() => open(m.id)}
+                    aria-current={(active && wide) || undefined}
+                    className={cn('w-full px-3 py-3 text-left transition-colors lg:py-2.5', active && wide ? 'bg-white/[0.06]' : 'hover:bg-white/[0.03]')}
                   >
                     <span className="flex items-center gap-2">
                       <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{m.name}</span>
@@ -126,15 +184,39 @@ export function WebsView({
           <p className="text-[11.5px] text-ink-3">Barras: últimas 24 horas, una por hora.</p>
         </aside>
 
-        <div className="min-w-0">
+        <div className="min-w-0" hidden={!detailVisible}>
+          {!wide && (
+            <button type="button" onClick={() => setShowDetail(false)} className="mb-3 inline-flex items-center gap-1 py-1 text-[13px] text-ink-2 hover:text-ink">
+              <ChevronLeft size={16} aria-hidden /> Todas las webs
+            </button>
+          )}
           {selected ? (
-            <WebDetail key={selected.id} monitor={selected} onChange={onChange} onRemoved={() => onSelect(null)} now={now} />
+            <WebDetail
+              key={selected.id}
+              monitor={selected}
+              onChange={onChange}
+              onRemoved={() => {
+                onSelect(null);
+                setShowDetail(false);
+              }}
+              now={now}
+            />
           ) : (
             <div className="rounded-[14px] border border-line bg-surface p-8 text-center text-sm text-ink-3">Elige una web de la lista.</div>
           )}
         </div>
       </div>
       <NpmDialog open={npmOpen} onClose={() => setNpmOpen(false)} servers={servers} onImported={() => void onChange()} />
+      <DiscoveryDialog
+        open={findOpen}
+        onClose={() => setFindOpen(false)}
+        state={discovery.data}
+        onState={(st: DiscoveryState) => discovery.setData(st)}
+        onWatched={() => {
+          void onChange();
+          void bars.refresh();
+        }}
+      />
     </div>
   );
 }
@@ -142,20 +224,20 @@ export function WebsView({
 function Card({ title, aside, children }: { title: string; aside?: React.ReactNode; children: React.ReactNode }) {
   return (
     <section className="rounded-[14px] border border-line bg-surface">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-line px-3 py-2.5 sm:px-4">
         <h3 className="text-[13px] font-semibold">{title}</h3>
         {aside}
       </div>
-      <div className="p-4">{children}</div>
+      <div className="p-3 sm:p-4">{children}</div>
     </section>
   );
 }
 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: 'bad' | 'ok' }) {
   return (
-    <div className="rounded-[12px] border border-line bg-surface px-4 py-3">
-      <p className="text-[11.5px] text-ink-3">{label}</p>
-      <p className="mt-1 flex items-center gap-1.5 text-xl font-semibold tabular-nums">
+    <div className="min-w-0 rounded-[12px] border border-line bg-surface px-3 py-2.5 sm:px-4 sm:py-3">
+      <p className="truncate text-[11.5px] text-ink-3">{label}</p>
+      <p className="mt-1 flex items-center gap-1.5 text-lg font-semibold tabular-nums sm:text-xl">
         {tone && <span className={cn('size-2 rounded-full', tone === 'bad' ? 'bg-bad' : 'bg-ok')} aria-hidden />}
         {value}
       </p>
@@ -261,12 +343,12 @@ function WebDetail({ monitor, onChange, onRemoved, now }: { monitor: Monitor; on
     <div className="space-y-4">
       {/* Cabecera */}
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
+        <div className="w-full min-w-0 sm:w-auto sm:flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="truncate text-lg font-semibold">{monitor.name}</h2>
+            <h2 className="min-w-0 truncate text-lg font-semibold">{monitor.name}</h2>
             <StatusBadge tone={meta.tone} label={meta.label} />
           </div>
-          <a href={monitor.url} target="_blank" rel="noreferrer" className="mt-0.5 inline-flex items-center gap-1 font-mono text-xs text-ink-3 hover:text-ink">
+          <a href={monitor.url} target="_blank" rel="noreferrer" className="mt-0.5 inline-flex max-w-full items-center gap-1 font-mono text-xs break-all text-ink-3 hover:text-ink">
             {monitor.url} <ExternalLink size={11} aria-hidden />
           </a>
         </div>
@@ -292,17 +374,18 @@ function WebDetail({ monitor, onChange, onRemoved, now }: { monitor: Monitor; on
       >
         <RouteAnimation diagnosis={tracing && !diagnosis ? null : diagnosis} tracing={tracing} selected={shownNode} onSelect={setNode} />
         {diagnosis ? (
-          <div className="mt-3 grid gap-3 md:grid-cols-2">
-            <div className={cn('rounded-[10px] border px-3 py-2.5', diagnosis.ok ? 'border-ok/25 bg-ok/[0.06]' : 'border-bad/30 bg-bad/[0.07]')}>
+          <div className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-3 md:grid-cols-2">
+            <div className={cn('min-w-0 rounded-[10px] border px-3 py-2.5', diagnosis.ok ? 'border-ok/25 bg-ok/[0.06]' : 'border-bad/30 bg-bad/[0.07]')}>
               <p className={cn('text-[13px] font-semibold', diagnosis.ok ? 'text-ok' : 'text-bad')}>{diagnosis.title}</p>
               <p className="mt-1 text-[12.5px] leading-relaxed text-ink-2">{diagnosis.summary}</p>
               {diagnosis.action && (
-                <Button variant="primary" size="sm" className="mt-2.5" loading={starting} icon={<Play size={13} aria-hidden />} onClick={start}>
+                <Button variant="primary" size="sm" className="mt-2.5 h-auto min-h-8 max-w-full py-1.5 text-left whitespace-normal" loading={starting} icon={<Play size={13} aria-hidden />} onClick={start}>
                   Arrancar {diagnosis.action.container} en {diagnosis.action.serverName}
                 </Button>
               )}
             </div>
-            <div className="rounded-[10px] border border-line px-3 py-2.5">
+            {/* En el móvil la ruta en vertical ya explica cada paso: la lista solo sale al tocar uno */}
+            <div className={cn('min-w-0 rounded-[10px] border border-line px-3 py-2.5', !(step && node) && 'max-sm:hidden')}>
               {step && node ? (
                 <>
                   <div className="flex items-center justify-between gap-2">
@@ -356,7 +439,7 @@ function WebDetail({ monitor, onChange, onRemoved, now }: { monitor: Monitor; on
           ))}
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 xl:grid-cols-4">
         <Stat label="Disponibilidad" value={uptime === null ? '—' : formatPercent(uptime, 2)} />
         <Stat label="Cortes" value={incidents.data ? String(list.length) : '—'} tone={list.some((i) => !i.endedAt) ? 'bad' : undefined} />
         <Stat label="Tiempo caída" value={incidents.data ? (downtime ? duration(downtime) : '0 min') : '—'} />
@@ -396,23 +479,37 @@ function UptimeBars({
   now: number;
 }) {
   const [hover, setHover] = useState<number | null>(null);
+  const [boxRef, width] = useWidth<HTMLDivElement>();
+  // En pantallas estrechas se juntan los tramos de dos en dos (o de cuatro en cuatro) para que se vean.
+  const group = width && width < 360 ? 4 : width && width < 620 ? 2 : 1;
+  const span = bucketMs * group;
   const slots = useMemo(() => {
     if (!points || !bucketMs) return null;
-    const count = 96;
-    const last = Math.floor(now / bucketMs) * bucketMs;
+    const count = 96 / group;
+    const last = Math.floor(now / span) * span;
     const byT = new Map(points.map((p) => [p.t, p]));
     return Array.from({ length: count }, (_, i) => {
-      const t = last - (count - 1 - i) * bucketMs;
-      const outage = incidents.find((inc) => inc.startedAt < t + bucketMs && (inc.endedAt ?? now) > t) ?? null;
-      return { t, point: byT.get(t) ?? null, outage };
+      const t = last - (count - 1 - i) * span;
+      const parts = Array.from({ length: group }, (_, k) => byT.get(t + k * bucketMs)).filter(Boolean) as MonitorHistoryPoint[];
+      const checks = parts.reduce((a, p) => a + p.checks, 0);
+      const point: MonitorHistoryPoint | null = checks
+        ? {
+            t,
+            checks,
+            uptime: parts.reduce((a, p) => a + (p.uptime ?? 0) * p.checks, 0) / checks,
+            latency: parts.some((p) => p.latency) ? Math.round(parts.reduce((a, p) => a + (p.latency ?? 0), 0) / parts.filter((p) => p.latency).length) : null,
+          }
+        : null;
+      const outage = incidents.find((inc) => inc.startedAt < t + span && (inc.endedAt ?? now) > t) ?? null;
+      return { t, point, outage };
     });
-  }, [points, bucketMs, incidents, now]);
+  }, [points, bucketMs, incidents, now, group, span]);
 
-  if (!slots) return <div className="h-12 animate-pulse rounded-md bg-surface-2" />;
+  if (!slots) return <div ref={boxRef} className="h-12 animate-pulse rounded-md bg-surface-2" />;
   const h = slots[hover ?? -1];
   const withDate = range !== '24h';
   return (
-    <div className="relative">
+    <div className="relative" ref={boxRef}>
       <div className="flex h-12 items-stretch gap-[2px]" onMouseLeave={() => setHover(null)}>
         {slots.map((s, i) => (
           <button
@@ -435,11 +532,11 @@ function UptimeBars({
       </div>
       {h && (
         <div
-          className="pointer-events-none absolute -top-2 z-10 w-max max-w-[220px] -translate-x-1/2 -translate-y-full rounded-lg border border-line-strong bg-surface-3 px-2.5 py-1.5 text-[11.5px] shadow-xl"
-          style={{ left: `${((hover! + 0.5) / slots.length) * 100}%` }}
+          className="pointer-events-none absolute -top-2 z-10 w-max max-w-[220px] -translate-y-full rounded-lg border border-line-strong bg-surface-3 px-2.5 py-1.5 text-[11.5px] shadow-xl"
+          style={tooltipPos(hover!, slots.length)}
         >
           <p className="font-medium text-ink">
-            {formatTime(h.t, withDate)} – {formatTime(h.t + bucketMs, withDate)}
+            {formatTime(h.t, withDate)} – {formatTime(h.t + span, withDate)}
           </p>
           {h.point ? (
             <p className="text-ink-2">
@@ -515,21 +612,33 @@ function IncidentList({ incidents, now }: { incidents: WebIncident[] | null; now
 /** Visitas por tramo: las que fueron bien abajo, las fallidas encima (en rojo), con un hueco de 2 px entre ambas. */
 function TrafficChart({ traffic, range, now }: { traffic: import('../../../shared/types').WebTraffic | null; range: HistoryRange; now: number }) {
   const [hover, setHover] = useState<number | null>(null);
+  const [boxRef, width] = useWidth<HTMLDivElement>();
+  const group = width && width < 360 ? 4 : width && width < 620 ? 2 : 1;
+  const span = (traffic?.bucketMs ?? 0) * group;
   const slots = useMemo(() => {
     if (!traffic?.bucketMs) return null;
-    const count = 96;
-    const last = Math.floor(now / traffic.bucketMs) * traffic.bucketMs;
+    const count = 96 / group;
+    const last = Math.floor(now / span) * span;
     const byT = new Map(traffic.points.map((p) => [p.t, p]));
     return Array.from({ length: count }, (_, i) => {
-      const t = last - (count - 1 - i) * traffic.bucketMs;
-      return byT.get(t) ?? ({ t, requests: 0, failed: 0, gateway: 0 } as WebTrafficPoint);
+      const t = last - (count - 1 - i) * span;
+      const acc: WebTrafficPoint = { t, requests: 0, failed: 0, gateway: 0 };
+      for (let k = 0; k < group; k++) {
+        const p = byT.get(t + k * traffic.bucketMs);
+        if (p) {
+          acc.requests += p.requests;
+          acc.failed += p.failed;
+          acc.gateway += p.gateway;
+        }
+      }
+      return acc;
     });
-  }, [traffic, now]);
+  }, [traffic, now, group, span]);
 
-  if (!traffic || !slots) return <div className="h-40 animate-pulse rounded-md bg-surface-2" />;
+  if (!traffic || !slots) return <div ref={boxRef} className="h-40 animate-pulse rounded-md bg-surface-2" />;
   if (!traffic.lastAt) {
     return (
-      <p className="text-[13px] text-ink-3">
+      <p ref={boxRef} className="text-[13px] text-ink-3">
         Aún no llegan visitas de esta web. Se leen de los logs de Nginx Proxy Manager: actualiza el script de métricas en el servidor donde está NPM y en
         un minuto empezarán a aparecer.
       </p>
@@ -545,11 +654,11 @@ function TrafficChart({ traffic, range, now }: { traffic: import('../../../share
   const withDate = range !== '24h';
   const h = hover !== null ? slots[hover] : null;
   return (
-    <div>
+    <div ref={boxRef}>
       <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-[11.5px] text-ink-2">
         <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-info" aria-hidden /> Visitas que fueron bien</span>
         <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-bad" aria-hidden /> Visitas con error (5xx)</span>
-        <span className="ml-auto text-ink-3">Último dato {timeAgo(traffic.lastAt, now)}</span>
+        <span className="text-ink-3 sm:ml-auto">Último dato {timeAgo(traffic.lastAt, now)}</span>
       </div>
       <div className="relative flex gap-2">
         <div className="flex flex-col justify-between py-0 text-right font-mono text-[10.5px] text-ink-3" style={{ height: H }}>
@@ -591,11 +700,11 @@ function TrafficChart({ traffic, range, now }: { traffic: import('../../../share
           </div>
           {h && (
             <div
-              className="pointer-events-none absolute top-0 z-10 w-max max-w-[220px] -translate-x-1/2 -translate-y-full rounded-lg border border-line-strong bg-surface-3 px-2.5 py-1.5 text-[11.5px] shadow-xl"
-              style={{ left: `${((hover! + 0.5) / slots.length) * 100}%` }}
+              className="pointer-events-none absolute top-0 z-10 w-max max-w-[220px] -translate-y-full rounded-lg border border-line-strong bg-surface-3 px-2.5 py-1.5 text-[11.5px] shadow-xl"
+              style={tooltipPos(hover!, slots.length)}
             >
               <p className="font-medium text-ink">
-                {formatTime(h.t, withDate)} – {formatTime(h.t + traffic.bucketMs, withDate)}
+                {formatTime(h.t, withDate)} – {formatTime(h.t + span, withDate)}
               </p>
               <p className="text-ink-2">{formatNumber(h.requests)} visitas</p>
               {h.failed > 0 && (

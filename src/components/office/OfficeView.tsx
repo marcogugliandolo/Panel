@@ -128,6 +128,12 @@ export function OfficeView({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [swiped, setSwiped] = useState(false);
+  // El aviso de «desliza» se quita solo al rato aunque no se toque.
+  useEffect(() => {
+    const t = window.setTimeout(() => setSwiped(true), 9000);
+    return () => window.clearTimeout(t);
+  }, []);
   const ovOficinaRef = useRef<HTMLDivElement>(null);
   const ovEdificioRef = useRef<HTMLDivElement>(null);
   const sideRef = useRef<HTMLElement>(null);
@@ -249,8 +255,8 @@ export function OfficeView({
         <section className="of-stage" aria-labelledby="of-title">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-line px-4 py-2">
             <h2 id="of-title" className="text-sm font-semibold">{text.title}</h2>
-            <p className="min-w-0 flex-1 text-[12.5px] text-ink-3">{text.hint}</p>
-            <div role="group" aria-label="Cómo ver la oficina" className="flex rounded-lg border border-line p-0.5">
+            <p className="min-w-0 flex-1 text-[12.5px] text-ink-3 max-sm:order-last max-sm:basis-full">{text.hint}</p>
+            <div role="group" aria-label="Cómo ver la oficina" className="flex rounded-lg border border-line p-0.5 max-sm:ml-auto">
               {([['oficina', 'Plano'], ['edificio', 'Edificio']] as const).map(([value, label]) => (
                 <button
                   key={value}
@@ -267,12 +273,26 @@ export function OfficeView({
               ))}
             </div>
           </div>
-          <div ref={scrollRef} className="scrollbar-thin overflow-x-auto overflow-y-hidden">
-            <div ref={worldRef} className="sc-world">
-              <canvas ref={canvasRef} role="img" aria-label={text.label} />
-              <div ref={ovOficinaRef} className="sc-overlay" />
-              <div ref={ovEdificioRef} className="sc-overlay" hidden />
+          <div className="relative">
+            <div
+              ref={scrollRef}
+              className="scrollbar-thin overflow-x-auto overflow-y-hidden"
+              // Al centrar el plano la propia escena hace scroll: el aviso solo se quita cuando lo toca la persona.
+              onTouchStart={() => setSwiped(true)}
+              onPointerDown={() => setSwiped(true)}
+            >
+              <div ref={worldRef} className="sc-world">
+                <canvas ref={canvasRef} role="img" aria-label={text.label} />
+                <div ref={ovOficinaRef} className="sc-overlay" />
+                <div ref={ovEdificioRef} className="sc-overlay" hidden />
+              </div>
             </div>
+            {/* En el móvil el plano no cabe entero: se avisa de que se puede deslizar */}
+            {!swiped && (
+              <p className="pointer-events-none absolute bottom-2 left-1/2 z-[3] -translate-x-1/2 rounded-full border border-white/10 bg-black/75 px-3 py-1 text-[11.5px] whitespace-nowrap text-ink-2 sm:hidden">
+                ← Desliza para ver toda la planta →
+              </p>
+            )}
           </div>
         </section>
 

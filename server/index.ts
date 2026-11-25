@@ -9,6 +9,7 @@ import { createMonitorService } from './monitors';
 import { createNotifier } from './notifier';
 import { createNpmService } from './npm';
 import { createDiagnoser } from './diagnose';
+import { createDiscovery } from './discovery';
 import { createLayoutRouter } from './routes/layout';
 import { createPortainerRouter } from './routes/portainer';
 import { createIngestHandler, createStatsRouter } from './routes/stats';
@@ -38,6 +39,7 @@ async function main() {
   const monitors = createMonitorService(db);
   const npm = createNpmService(db, monitors);
   monitors.setDiagnoser(createDiagnoser(db, npm));
+  const discovery = createDiscovery(db, monitors, npm);
   const notifier = createNotifier(db, monitors);
 
   // Rutas públicas
@@ -55,6 +57,7 @@ async function main() {
   app.use('/api/portainer', createPortainerRouter({ onContainerAction: notifier.containerAction }));
   app.use('/api/notify', notifier.router);
   app.use('/api/npm', npm.router);
+  app.use('/api/discovery', discovery.router);
   app.use('/api/monitors', monitors.router);
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'Ruta no encontrada' });
@@ -94,6 +97,7 @@ async function main() {
   monitors.start();
   notifier.start();
   npm.start();
+  discovery.start();
 
   if (!config.statsToken) {
     console.warn('[stats] STATS_TOKEN no está definido: se aceptan métricas de cualquiera. Configúralo cuando actualices los scripts.');

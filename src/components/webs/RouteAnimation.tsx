@@ -1,5 +1,6 @@
 import { AppWindow, Globe, LockKeyhole, MonitorSmartphone, Package, Server, Waypoints } from 'lucide-react';
 import { useEffect, useMemo, useRef } from 'react';
+import { useWidth } from '../../lib/hooks';
 import type { Diagnosis, RouteStep, RouteStepId } from '../../../shared/types';
 import { cn } from '../../lib/utils';
 
@@ -37,6 +38,10 @@ const GAP = 128;
 const PAD = 52;
 const CY = 52;
 const R = 22;
+/** En vertical (móvil): separación entre pasos y columna de los círculos. */
+const VGAP = 66;
+const VPAD = 30;
+const VX = 30;
 const SEGMENT_MS = 520;
 const PAUSE_MS = 1100;
 
@@ -74,9 +79,12 @@ export function RouteAnimation({
   }, [diagnosis]);
 
   const failIndex = nodes.findIndex((n) => n.status === 'fail');
-  const width = PAD * 2 + GAP * (nodes.length - 1);
-  const height = 132;
-  const x = (i: number) => PAD + i * GAP;
+  const [boxRef, boxWidth] = useWidth<HTMLDivElement>();
+  // En pantallas estrechas la ruta va de arriba abajo, con la explicación de cada paso al lado.
+  const vertical = boxWidth > 0 && boxWidth < 600;
+  const width = vertical ? Math.max(280, boxWidth) : PAD * 2 + GAP * (nodes.length - 1);
+  const height = vertical ? VPAD * 2 + VGAP * (nodes.length - 1) + 8 : 132;
+  const at = (pos: number) => (vertical ? { x: VX, y: VPAD + pos * VGAP } : { x: PAD + pos * GAP, y: CY });
   /** Hasta dónde llega la visita: justo antes del corte, o hasta la aplicación. */
   const end = failIndex === -1 ? nodes.length - 1 : failIndex - 0.42;
 
@@ -90,13 +98,16 @@ export function RouteAnimation({
     const burst = burstRef.current;
     if (!packet || !glow || !burst) return;
     const place = (pos: number) => {
-      const px = PAD + pos * GAP;
-      packet.setAttribute('cx', String(px));
-      glow.setAttribute('cx', String(px));
+      const p = at(pos);
+      for (const el of [packet, glow]) {
+        el.setAttribute('cx', String(p.x));
+        el.setAttribute('cy', String(p.y));
+      }
     };
     const ending = failIndex === -1 ? 'arrive' : 'cut';
-    const endX = PAD + end * GAP;
-    burst.setAttribute('cx', String(failIndex === -1 ? x(nodes.length - 1) : endX + 10));
+    const target = failIndex === -1 ? at(nodes.length - 1) : at(end + 0.08);
+    burst.setAttribute('cx', String(target.x));
+    burst.setAttribute('cy', String(target.y));
     if (REDUCED || !diagnosis || tracing) {
       place(diagnosis && !tracing ? end : 0);
       burst.setAttribute('r', '0');
@@ -108,11 +119,9 @@ export function RouteAnimation({
     const frame = (now: number) => {
       const t = now - start;
       if (t <= travel) {
-        // Velocidad constante, con una pequeña pausa en cada nodo para que se vea pasar por él.
         const pos = (t / travel) * end;
         const whole = Math.floor(pos);
-        const frac = pos - whole;
-        const eased = whole + Math.min(1, frac * 1.15);
+        const eased = whole + Math.min(1, (pos - whole) * 1.15);
         place(Math.min(end, eased));
         packet.setAttribute('opacity', '1');
         glow.setAttribute('opacity', '0.35');
@@ -130,102 +139,135 @@ export function RouteAnimation({
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
-  }, [diagnosis, tracing, end, failIndex, nodes.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diagnosis, tracing, end, failIndex, nodes.length, vertical, width]);
 
   const packetColor = failIndex === -1 ? 'var(--color-ok)' : 'var(--color-bad)';
+  const start = at(0);
+
+  /** Enlace entre dos pasos, recortado para no pisar los círculos. */
+  const link = (i: number) => {
+    const a = at(i - 1);
+    const b = at(i);
+    const len = vertical ? b.y - a.y : b.x - a.x;
+    const from = R + 4;
+    const to = len - R - 4;
+    const p = (d: number) => (vertical ? { x: a.x, y: a.y + d } : { x: a.x + d, y: a.y });
+    return { p, from, to, mid: (from + to) / 2 };
+  };
 
   return (
-    <div className="scrollbar-thin overflow-x-auto">
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="block h-auto w-full"
-        style={{ minWidth: Math.min(width, 640) }}
-        role="img"
-        aria-label={diagnosis ? `Ruta de la visita: ${diagnosis.title}` : 'Ruta de la visita, aún sin comprobar'}
-      >
-        {/* Enlaces entre pasos */}
-        {nodes.slice(1).map((n, k) => {
-          const i = k + 1;
-          const x1 = x(i - 1) + R + 4;
-          const x2 = x(i) - R - 4;
-          if (failIndex !== -1 && i > failIndex) {
-            return <line key={`l${i}`} x1={x1} y1={CY} x2={x2} y2={CY} stroke="var(--color-line-strong)" strokeWidth={2} strokeDasharray="3 5" />;
-          }
-          if (i === failIndex) {
-            // El corte: el enlace se rompe antes de llegar.
-            const mid = (x1 + x2) / 2;
+    <div ref={boxRef} className={cn(!vertical && 'scrollbar-thin overflow-x-auto')}>
+      {boxWidth > 0 && (
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          className="block h-auto w-full"
+          style={vertical ? undefined : { minWidth: Math.min(width, 640) }}
+          role="img"
+          aria-label={diagnosis ? `Ruta de la visita: ${diagnosis.title}` : 'Ruta de la visita, aún sin comprobar'}
+        >
+          {/* Enlaces entre pasos */}
+          {nodes.slice(1).map((n, k) => {
+            const i = k + 1;
+            const { p, from, to, mid } = link(i);
+            const A = p(from);
+            const B = p(to);
+            if (failIndex !== -1 && i > failIndex) {
+              return <line key={`l${i}`} x1={A.x} y1={A.y} x2={B.x} y2={B.y} stroke="var(--color-line-strong)" strokeWidth={2} strokeDasharray="3 5" />;
+            }
+            if (i === failIndex) {
+              const M1 = p(mid - 7);
+              const M2 = p(mid + 7);
+              const C = p(mid);
+              return (
+                <g key={`l${i}`}>
+                  <line x1={A.x} y1={A.y} x2={M1.x} y2={M1.y} stroke="var(--color-bad)" strokeWidth={2} strokeLinecap="round" />
+                  <line x1={M2.x} y1={M2.y} x2={B.x} y2={B.y} stroke="var(--color-bad)" strokeOpacity={0.35} strokeWidth={2} strokeDasharray="3 5" />
+                  <path d={`M${C.x - 5} ${C.y - 6} L${C.x + 5} ${C.y + 6} M${C.x + 5} ${C.y - 6} L${C.x - 5} ${C.y + 6}`} stroke="var(--color-bad)" strokeWidth={2.5} strokeLinecap="round" />
+                </g>
+              );
+            }
+            const color = diagnosis ? (n.status === 'warn' ? 'var(--color-warn)' : 'var(--color-ok)') : 'var(--color-line-strong)';
+            return <line key={`l${i}`} x1={A.x} y1={A.y} x2={B.x} y2={B.y} stroke={color} strokeOpacity={diagnosis ? 0.55 : 1} strokeWidth={2} strokeLinecap="round" />;
+          })}
+
+          {/* La visita viajando */}
+          <circle ref={burstRef} cx={start.x} cy={start.y} r={0} fill="none" stroke={packetColor} strokeWidth={2} />
+          <circle ref={glowRef} cx={start.x} cy={start.y} r={9} fill={packetColor} opacity={0} style={{ filter: 'blur(3px)' }} />
+          <circle ref={packetRef} cx={start.x} cy={start.y} r={5} fill={packetColor} stroke="var(--color-surface)" strokeWidth={2} opacity={diagnosis && !tracing ? 1 : 0} />
+
+          {/* Pasos */}
+          {nodes.map((n, i) => {
+            const Icon = ICONS[n.id];
+            const after = failIndex !== -1 && i > failIndex;
+            const isSel = selected === n.id;
+            const c = at(i);
+            const textX = c.x + R + 14;
+            const maxChars = Math.max(12, Math.floor((width - textX - 8) / 6.4));
             return (
-              <g key={`l${i}`}>
-                <line x1={x1} y1={CY} x2={mid - 7} y2={CY} stroke="var(--color-bad)" strokeWidth={2} strokeLinecap="round" />
-                <line x1={mid + 7} y1={CY} x2={x2} y2={CY} stroke="var(--color-bad)" strokeOpacity={0.35} strokeWidth={2} strokeDasharray="3 5" />
-                <path d={`M${mid - 5} ${CY - 9} L${mid + 5} ${CY + 9} M${mid + 5} ${CY - 9} L${mid - 5} ${CY + 9}`} stroke="var(--color-bad)" strokeWidth={2.5} strokeLinecap="round" />
+              <g
+                key={n.id}
+                role="button"
+                tabIndex={0}
+                aria-label={`${n.kind}: ${n.label}. ${n.detail}`}
+                onClick={() => onSelect(n.id)}
+                onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onSelect(n.id)}
+                className={cn('cursor-pointer outline-none', after && 'opacity-45')}
+              >
+                <title>{`${n.kind} · ${n.label}${n.detail ? `\n${n.detail}` : ''}`}</title>
+                {/* Zona de toque más grande que el dibujo */}
+                {vertical ? (
+                  <rect x={0} y={c.y - VGAP / 2 + 2} width={width} height={VGAP - 4} fill="transparent" />
+                ) : (
+                  <rect x={c.x - GAP / 2 + 6} y={4} width={GAP - 12} height={height - 8} fill="transparent" />
+                )}
+                {isSel && <circle cx={c.x} cy={c.y} r={R + 6} fill="none" stroke="var(--color-ink-3)" strokeWidth={1} strokeDasharray="2 3" />}
+                {n.status === 'fail' && !REDUCED && <circle cx={c.x} cy={c.y} r={R} fill="none" stroke="var(--color-bad)" strokeWidth={2} className="route-pulse" />}
+                <circle
+                  cx={c.x}
+                  cy={c.y}
+                  r={R}
+                  fill={n.status === 'fail' ? 'rgb(255 77 77 / 0.14)' : n.status === 'ok' ? 'rgb(0 255 157 / 0.08)' : n.status === 'warn' ? 'rgb(255 204 0 / 0.1)' : 'var(--color-surface-2)'}
+                  stroke={STROKE[n.status]}
+                  strokeOpacity={n.status === 'skip' ? 1 : 0.8}
+                  strokeWidth={n.status === 'fail' ? 2 : 1.5}
+                />
+                <Icon x={c.x - 9} y={c.y - 9} width={18} height={18} color={n.status === 'skip' ? 'var(--color-ink-3)' : STROKE[n.status]} strokeWidth={2} aria-hidden />
+                {vertical ? (
+                  <>
+                    <text x={textX} y={c.y - 7} className="fill-ink-3" style={{ fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                      {n.kind}
+                      {n.status === 'fail' ? ' · se corta aquí' : ''}
+                    </text>
+                    <text x={textX} y={c.y + 9} className={n.status === 'fail' ? 'fill-bad' : isSel ? 'fill-ink' : 'fill-ink-2'} style={{ fontSize: 13, fontWeight: 500 }}>
+                      {short(n.label, maxChars)}
+                    </text>
+                    {n.detail && n.status !== 'skip' && (
+                      <text x={textX} y={c.y + 24} className="fill-ink-3" style={{ fontSize: 11 }}>
+                        {short(n.detail, Math.floor(maxChars * 1.12))}
+                      </text>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <text x={c.x} y={c.y + R + 18} textAnchor="middle" className="fill-ink-3" style={{ fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                      {n.kind}
+                    </text>
+                    <text x={c.x} y={c.y + R + 34} textAnchor="middle" className={isSel ? 'fill-ink' : 'fill-ink-2'} style={{ fontSize: 12, fontWeight: 500 }}>
+                      {short(n.label)}
+                    </text>
+                    {n.status === 'fail' && (
+                      <text x={c.x} y={c.y + R + 50} textAnchor="middle" style={{ fontSize: 10.5, fontWeight: 600 }} className="fill-bad">
+                        se corta aquí
+                      </text>
+                    )}
+                  </>
+                )}
               </g>
             );
-          }
-          const color = diagnosis ? (n.status === 'warn' ? 'var(--color-warn)' : 'var(--color-ok)') : 'var(--color-line-strong)';
-          return <line key={`l${i}`} x1={x1} y1={CY} x2={x2} y2={CY} stroke={color} strokeOpacity={diagnosis ? 0.55 : 1} strokeWidth={2} strokeLinecap="round" />;
-        })}
-
-        {/* La visita viajando */}
-        <circle ref={burstRef} cy={CY} r={0} fill="none" stroke={packetColor} strokeWidth={2} />
-        <circle ref={glowRef} cy={CY} r={9} fill={packetColor} opacity={0} style={{ filter: 'blur(3px)' }} cx={PAD} />
-        <circle ref={packetRef} cy={CY} r={5} fill={packetColor} stroke="var(--color-surface)" strokeWidth={2} cx={PAD} opacity={diagnosis && !tracing ? 1 : 0} />
-
-        {/* Pasos */}
-        {nodes.map((n, i) => {
-          const Icon = ICONS[n.id];
-          const after = failIndex !== -1 && i > failIndex;
-          const isSel = selected === n.id;
-          return (
-            <g
-              key={n.id}
-              role="button"
-              tabIndex={0}
-              aria-label={`${n.kind}: ${n.label}. ${n.detail}`}
-              onClick={() => onSelect(n.id)}
-              onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onSelect(n.id)}
-              className={cn('cursor-pointer outline-none', after && 'opacity-45')}
-            >
-              <title>{`${n.kind} · ${n.label}${n.detail ? `\n${n.detail}` : ''}`}</title>
-              {/* Zona de clic más grande que el dibujo */}
-              <rect x={x(i) - GAP / 2 + 6} y={4} width={GAP - 12} height={height - 8} fill="transparent" />
-              {isSel && <circle cx={x(i)} cy={CY} r={R + 6} fill="none" stroke="var(--color-ink-3)" strokeWidth={1} strokeDasharray="2 3" />}
-              {n.status === 'fail' && !REDUCED && (
-                <circle cx={x(i)} cy={CY} r={R} fill="none" stroke="var(--color-bad)" strokeWidth={2} className="route-pulse" />
-              )}
-              <circle
-                cx={x(i)}
-                cy={CY}
-                r={R}
-                fill={n.status === 'fail' ? 'rgb(255 77 77 / 0.14)' : n.status === 'ok' ? 'rgb(0 255 157 / 0.08)' : n.status === 'warn' ? 'rgb(255 204 0 / 0.1)' : 'var(--color-surface-2)'}
-                stroke={STROKE[n.status]}
-                strokeOpacity={n.status === 'skip' ? 1 : 0.8}
-                strokeWidth={n.status === 'fail' ? 2 : 1.5}
-              />
-              <Icon
-                x={x(i) - 9}
-                y={CY - 9}
-                width={18}
-                height={18}
-                color={n.status === 'skip' ? 'var(--color-ink-3)' : STROKE[n.status]}
-                strokeWidth={2}
-                aria-hidden
-              />
-              <text x={x(i)} y={CY + R + 18} textAnchor="middle" className="fill-ink-3" style={{ fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-                {n.kind}
-              </text>
-              <text x={x(i)} y={CY + R + 34} textAnchor="middle" className={isSel ? 'fill-ink' : 'fill-ink-2'} style={{ fontSize: 12, fontWeight: 500 }}>
-                {short(n.label)}
-              </text>
-              {n.status === 'fail' && (
-                <text x={x(i)} y={CY + R + 50} textAnchor="middle" style={{ fontSize: 10.5, fontWeight: 600 }} className="fill-bad">
-                  se corta aquí
-                </text>
-              )}
-            </g>
-          );
-        })}
-      </svg>
+          })}
+        </svg>
+      )}
     </div>
   );
 }

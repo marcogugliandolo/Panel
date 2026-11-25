@@ -81,13 +81,13 @@ export function Header({
   );
 
   return (
-    <header className="sticky top-0 z-40 flex min-h-[5rem] flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b border-white/10 bg-[#0a0a0c]/80 px-4 py-3 backdrop-blur-xl md:px-8 [@media(max-height:500px)]:min-h-0 [@media(max-height:500px)]:py-2">
-      <div className="flex min-w-0 items-center gap-3 md:gap-4">
+    <header className="sticky top-0 z-40 flex min-h-[5rem] flex-wrap items-center justify-between gap-x-2 gap-y-2.5 border-b border-white/10 bg-[#0a0a0c]/80 px-3 py-2.5 backdrop-blur-xl sm:gap-x-4 sm:gap-y-3 sm:px-4 sm:py-3 md:px-8 max-lg:min-h-0 [@media(max-height:500px)]:min-h-0 [@media(max-height:500px)]:py-2">
+      <div className="flex min-w-0 items-center gap-2.5 md:gap-4">
         <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#00ff9d] to-[#00cc7d] text-black shadow-[0_0_20px_rgba(0,255,157,0.4)] md:size-10">
           <Activity className="size-5 md:size-6" strokeWidth={2.5} aria-hidden />
         </div>
         <div className="min-w-0">
-          <h1 className="flex items-center gap-2 text-lg font-bold tracking-tight text-white md:gap-3 md:text-xl">
+          <h1 className="flex items-center gap-2 text-base font-bold tracking-tight whitespace-nowrap text-white sm:text-lg md:gap-3 md:text-xl">
             Server Panel
             {isEditing ? (
               <span className="flex items-center gap-1.5 rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 font-mono text-[9px] tracking-widest text-blue-400 md:text-[10px]">
@@ -95,7 +95,7 @@ export function Header({
                 <span className="hidden sm:inline">MODO EDICIÓN</span>
               </span>
             ) : (
-              <span className="flex items-center gap-1.5 rounded-full border border-[#00ff9d]/20 bg-[#00ff9d]/10 px-2 py-0.5 font-mono text-[9px] tracking-widest text-[#00ff9d] md:text-[10px]">
+              <span className="flex items-center gap-1.5 rounded-full border border-[#00ff9d]/20 bg-[#00ff9d]/10 px-2 py-0.5 font-mono text-[9px] tracking-widest text-[#00ff9d] max-[380px]:hidden md:text-[10px]">
                 <span className="size-1.5 animate-pulse rounded-full bg-[#00ff9d]" />
                 <span className="hidden sm:inline">EN VIVO</span>
               </span>
@@ -106,7 +106,7 @@ export function Header({
         <div className="ml-2 hidden lg:block [@media(max-height:500px)]:block">{switcher}</div>
       </div>
 
-      <div className="flex items-center gap-2 md:gap-4">
+      <div className="flex items-center gap-1.5 max-[380px]:gap-1 sm:gap-2 md:gap-4">
         {!isEditing && (
           <AlertsMenu
             alerts={alerts}
@@ -124,6 +124,8 @@ export function Header({
             onClick={onToggleEdit}
             className={cn(
               'flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-bold transition-all md:px-4',
+              // Colocar los equipos se hace mejor con pantalla grande: en el móvil no se ofrece (salvo para terminar).
+              !isEditing && 'max-sm:hidden',
               isEditing
                 ? 'border-blue-500/50 bg-blue-500/20 text-blue-400 hover:bg-blue-500/30'
                 : 'border-white/10 bg-white/5 text-white hover:bg-white/10',
@@ -136,7 +138,7 @@ export function Header({
         )}
 
         {!isEditing && (
-          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 md:px-4" role="status" aria-live="polite">
+          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2.5 py-2 max-[380px]:px-2 sm:px-3 md:px-4" role="status" aria-live="polite">
             <ShieldCheck size={16} className={state.color} aria-hidden />
             <span aria-hidden className="hidden font-mono text-xs tracking-widest text-[#8e9299] uppercase md:inline [@media(max-height:500px)]:hidden">
               Estado: <span className={cn('font-bold', state.color)}>{state.label}</span>
@@ -148,7 +150,7 @@ export function Header({
         <button
           type="button"
           onClick={onOpenSecurity}
-          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold text-white transition-all hover:bg-white/10 md:ml-2"
+          className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2.5 py-2 text-sm font-bold text-white transition-all hover:bg-white/10 max-[380px]:px-2 sm:px-3 md:ml-2"
           title="Seguridad (doble factor)"
           aria-label="Seguridad"
         >
@@ -158,7 +160,7 @@ export function Header({
         <button
           type="button"
           onClick={onLogout}
-          className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm font-bold text-red-400 transition-all hover:bg-red-500/20"
+          className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-2.5 py-2 text-sm font-bold text-red-400 transition-all hover:bg-red-500/20 max-[380px]:px-2 sm:px-3"
           title={username ? `Cerrar sesión (${username})` : 'Cerrar sesión'}
           aria-label="Cerrar sesión"
         >
@@ -217,7 +219,7 @@ function AlertsMenu({
       </button>
 
       {open && (
-        <div className="absolute top-full right-0 z-[60] mt-3 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-white/10 bg-[#151619] shadow-2xl">
+        <div className="absolute top-full right-0 z-[60] mt-3 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-white/10 bg-[#151619] shadow-2xl max-sm:fixed max-sm:inset-x-3 max-sm:top-14 max-sm:mt-0 max-sm:w-auto">
           <div className="flex items-center justify-between border-b border-white/5 bg-white/5 p-4">
             <h3 className="flex items-center gap-2 text-sm font-bold text-white">
               <Bell size={14} className="text-blue-400" aria-hidden />
