@@ -87,10 +87,12 @@ function toNpmHosts(value: unknown[]): DetectedNpmHost[] {
   for (const raw of value.slice(0, 500)) {
     if (!raw || typeof raw !== 'object') continue;
     const r = raw as Record<string, unknown>;
-    const domains = (Array.isArray(r.domains) ? r.domains : [])
-      .map((d) => String(d).toLowerCase().trim())
-      .filter((d) => /^[a-z0-9*][a-z0-9.*-]{0,252}$/.test(d))
-      .slice(0, 50);
+    // Sin repetidos (en Apache, ServerName y ServerAlias pueden llevar el mismo nombre).
+    const domains = [
+      ...new Set(
+        (Array.isArray(r.domains) ? r.domains : []).map((d) => String(d).toLowerCase().trim()).filter((d) => /^[a-z0-9*][a-z0-9.*-]{0,252}$/.test(d)),
+      ),
+    ].slice(0, 50);
     if (!domains.length) continue;
     hosts.push({
       domains,
