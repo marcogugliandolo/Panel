@@ -10,6 +10,8 @@
  */
 import type { ContainerInfo, DetectedNpmHost, ServerStats } from '../shared/types';
 import type { DB } from './db';
+import { parseNginxMinute, type TrafficSample } from './incidents';
+import { parseAdvanced } from './npmConf';
 import { readLayout } from './routes/layout';
 import { isConfigured, portainerFetch } from './routes/portainer';
 import { createIpMemory, readAllStats } from './routes/stats';
@@ -75,10 +77,51 @@ export function parseNpmConf(text: string, isErr: boolean): DetectedNpmHost | nu
   }
   const domains = names.trim().split(/\s+/).filter(Boolean).map((d) => d.toLowerCase());
   if (!domains.length) return null;
-  return { domains, host, port: /^\d+$/.test(port) ? Number(port) : 0, scheme, ssl, error: isErr };
+  const { root, fallback } = parseAdvanced(text);
+  return { domains, host, port: /^\d+$/.test(port) ? Number(port) : 0, scheme, ssl, error: isErr, root, fallback };
 }
 
 const HEX12 = /^[0-9a-f]{12,}$/;
+
+/** Salida de un `docker exec` sin TTY: trozos con una cabecera de 8 bytes (tipo y tamaño). Solo stdout. */
+export function demux(buf: Buffer): string {
+  const parts: Buffer[] = [];
+  let off = 0;
+  while (off + 8 <= buf.length) {
+    const type = buf[off];
+    const size = buf.readUInt32BE(off + 4);
+    if (type === 1) parts.push(buf.subarray(off + 8, off + 8 + size));
+    off += 8 + size;
+  }
+  return Buffer.concat(parts).toString('utf8');
+}
+
+/** Comprobaciones automáticas (este panel, Uptime Kuma…): no son visitas reales. */
+const MONITOR_UA = /ServerPanel-Monitor|Uptime-Kuma|UptimeRobot|Better ?Uptime|StatusCake|Pingdom|HetrixTools|Site24x7/i;
+
+/**
+ * Cuenta las visitas por web y minuto de unas líneas del registro de NPM
+ * («[26/Nov/2026:08:22:15 +0000] - 200 200 - GET https web.com "/" [Client …] … "agente" "-"»).
+ */
+export function countVisits(text: string): TrafficSample[] {
+  const by = new Map<string, TrafficSample>();
+  for (const line of text.split('\n')) {
+    const m = line.match(/^\[([^\]]+)\] \S+ (\S+) (\d{3}|-) - \S+ \S+ (\S+) "/);
+    if (!m || MONITOR_UA.test(line)) continue;
+    // «26/Nov/2026:08:22:15 +0000» → por minuto («26/Nov/2026:08:22 +0000»), como hace el script.
+    const minute = parseNginxMinute(m[1].replace(/^(\d{2}\/\w{3}\/\d{4}:\d{2}:\d{2}):\d{2}/, '$1'));
+    const host = m[4].toLowerCase();
+    if (minute === null || !/^[a-z0-9.-]{1,253}$/.test(host)) continue;
+    const status = Number(m[3] === '-' ? m[2] : m[3]);
+    const key = `${host}|${minute}`;
+    const s = by.get(key) ?? { host, minute, requests: 0, failed: 0, gateway: 0 };
+    s.requests++;
+    if (status >= 500) s.failed++;
+    if (status === 502 || status === 503 || status === 504) s.gateway++;
+    by.set(key, s);
+  }
+  return [...by.values()];
+}
 
 /** Un contenedor tal como lo da la API de Docker (lista o inspect). */
 function toContainer(raw: any, bindings?: Record<string, { HostIp?: string; HostPort?: string }[] | null>, extraAliases: string[] = []): ContainerInfo {
@@ -113,7 +156,7 @@ function toContainer(raw: any, bindings?: Record<string, { HostIp?: string; Host
   };
 }
 
-export function createPortainerScan(db: DB) {
+export function createPortainerScan(db: DB, onVisits: (samples: TrafficSample[]) => void = () => undefined) {
   let scans: EndpointScan[] = [];
   /**
    * Detalle de cada contenedor (alias de red y puertos configurados), que la lista no trae. Se pide
@@ -126,6 +169,52 @@ export function createPortainerScan(db: DB) {
 
   async function json<T>(path: string): Promise<T> {
     return (await (await portainerFetch(path)).json()) as T;
+  }
+
+  /** Ejecuta un comando de solo lectura dentro de un contenedor (como `docker exec`) y devuelve su salida. */
+  async function execIn(endpointId: number, containerId: string, script: string): Promise<string> {
+    const base = `/endpoints/${endpointId}/docker`;
+    const headers = { 'Content-Type': 'application/json' };
+    const created = (await (
+      await portainerFetch(`${base}/containers/${containerId}/exec`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ AttachStdout: true, AttachStderr: false, Tty: false, Cmd: ['sh', '-c', script] }),
+      })
+    ).json()) as { Id: string };
+    const res = await portainerFetch(`${base}/exec/${created.Id}/start`, { method: 'POST', headers, body: JSON.stringify({ Detach: false, Tty: false }) });
+    return demux(Buffer.from(await res.arrayBuffer()));
+  }
+
+  /**
+   * Visitas reales desde los registros de NPM (`/data/logs/proxy-host-N_access.log`): cada vuelta se
+   * lee solo lo nuevo de cada archivo (la primera vez, el último trozo); si NPM rota el registro, se
+   * empieza el nuevo. Hace lo mismo que el script de métricas cuando ese script es antiguo.
+   */
+  const logPos = new Map<string, { inode: string; pos: number }>();
+  const FIRST_READ = 128 * 1024;
+  const MAX_READ = 2 * 1024 * 1024;
+  async function readVisits(endpointId: number, containerId: string): Promise<TrafficSample[]> {
+    const listing = await execIn(endpointId, containerId, "cd /data/logs 2>/dev/null && stat -c '%n %i %s' proxy-host-*_access.log 2>/dev/null");
+    const plan: { file: string; inode: string; from: number; to: number }[] = [];
+    for (const line of listing.split('\n')) {
+      const [file, inode, sizeText] = line.trim().split(/\s+/);
+      const size = Number(sizeText);
+      if (!/^proxy-host-\d+_access\.log$/.test(file ?? '') || !Number.isFinite(size)) continue;
+      const key = `${endpointId}:${file}`;
+      const prev = logPos.get(key);
+      let from = prev && prev.inode === inode && size >= prev.pos ? prev.pos : prev ? 0 : Math.max(0, size - FIRST_READ);
+      if (size - from > MAX_READ) from = size - MAX_READ;
+      if (size > from) plan.push({ file, inode, from, to: size });
+      else logPos.set(key, { inode, pos: size });
+    }
+    if (!plan.length) return [];
+    // Un trozo por archivo, exactamente hasta el tamaño visto (lo que se escriba después, la próxima vez).
+    const script = `cd /data/logs && ${plan.map((p) => `echo '### ${p.file}'; tail -c +${p.from + 1} ${p.file} | head -c ${p.to - p.from}; echo`).join('; ')}`;
+    const out = await execIn(endpointId, containerId, script);
+    for (const p of plan) logPos.set(`${endpointId}:${p.file}`, { inode: p.inode, pos: p.to });
+    // La primera lectura puede empezar a mitad de línea: esa línea no cuadra con el formato y se ignora sola.
+    return countVisits(out);
   }
 
   /** A qué servidor del panel corresponde un entorno de Portainer. */
@@ -182,6 +271,9 @@ export function createPortainerScan(db: DB) {
     // Se olvida el detalle de los contenedores que ya no existen en este entorno.
     const ids = new Set(list.map((raw) => `${ep.Id}:${raw.Id}`));
     for (const id of [...detail.keys()]) if (id.startsWith(`${ep.Id}:`) && !ids.has(id)) detail.delete(id);
+    const where = mapEndpoint(ep, containers, stats);
+    // Si el script de ese servidor ya lee NPM (y sus registros), las visitas no se cuentan dos veces.
+    const scriptReadsNpm = Boolean(stats.find((st) => st.serverId === where.serverId)?.npmHosts);
     // Nginx Proxy Manager: el contenedor con /data montado y su carpeta de proxy hosts.
     let npm: EndpointScan['npm'] = null;
     const candidates = list
@@ -199,12 +291,19 @@ export function createPortainerScan(db: DB) {
           if (h) hosts.push(h);
         }
         npm = { container: String(raw.Names?.[0] ?? '').replace(/^\//, ''), hosts };
+        if (!scriptReadsNpm) {
+          try {
+            const visits = await readVisits(ep.Id, String(raw.Id));
+            if (visits.length) onVisits(visits);
+          } catch (error) {
+            console.warn(`[portainer] No se pueden leer los registros de NPM en ${ep.Name}: ${(error as Error).message}`);
+          }
+        }
         break;
       } catch {
         /* no es NPM o no se puede leer */
       }
     }
-    const where = mapEndpoint(ep, containers, stats);
     rememberIps(where.serverId, containers, Date.now());
     return { endpointId: ep.Id, name: ep.Name, ...where, containers, npm, at: Date.now() };
   }

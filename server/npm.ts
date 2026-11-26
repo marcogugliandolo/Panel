@@ -9,6 +9,7 @@
  */
 import express from 'express';
 import type { DetectedNpmHost } from '../shared/types';
+import { parseAdvanced, parseProxyPass, type NpmTarget } from './npmConf';
 import type { DB } from './db';
 import { readLayout } from './routes/layout';
 import { readAllStats } from './routes/stats';
@@ -24,6 +25,10 @@ export interface NpmProxyHost {
   /** false si NPM no ha podido cargar la configuración de este host. */
   online: boolean;
   error: string | null;
+  /** La configuración avanzada manda la portada a otro destino (el de la ficha no se usa para «/»). */
+  root?: NpmTarget | null;
+  /** Respaldo de la configuración avanzada para cuando el destino falla. */
+  fallback?: NpmTarget | null;
 }
 
 export interface NpmInstanceInfo {
@@ -72,7 +77,18 @@ function toHost(raw: any): NpmProxyHost {
     ssl: Number(raw.certificate_id) > 0,
     online: raw.meta?.nginx_online !== false,
     error: raw.meta?.nginx_err ? String(raw.meta.nginx_err).slice(0, 300) : null,
+    ...advancedTargets(raw),
   };
+}
+
+/** Destinos de la configuración avanzada y de las ubicaciones personalizadas de NPM (vía su API). */
+function advancedTargets(raw: any): { root: NpmTarget | null; fallback: NpmTarget | null } {
+  const adv = parseAdvanced(raw.advanced_config);
+  const slash = (Array.isArray(raw.locations) ? raw.locations : []).find((l: any) => l?.path === '/' && l.forward_host);
+  const fromLocation = slash
+    ? { scheme: String(slash.forward_scheme ?? 'http'), host: String(slash.forward_host).toLowerCase(), port: Number(slash.forward_port) || 80 }
+    : null;
+  return { root: parseProxyPass(adv.root) ?? fromLocation, fallback: parseProxyPass(adv.fallback) };
 }
 
 /** ¿Este dominio de NPM cubre el nombre? (admite comodines tipo *.dominio.com) */
@@ -237,6 +253,8 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
     ssl: h.ssl,
     online: !h.error,
     error: h.error ? 'NPM no ha podido cargar su configuración (el archivo quedó como .conf.err). Ábrelo en NPM y guárdalo para ver el error.' : null,
+    root: parseProxyPass(h.root),
+    fallback: parseProxyPass(h.fallback),
   });
   const detectedAuto = (serverId: string) => (db.prepare('SELECT value FROM settings WHERE key = ?').pluck().get(`npm_auto_srv_${serverId}`) as string | undefined) !== '0';
 

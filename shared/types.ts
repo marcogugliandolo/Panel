@@ -33,6 +33,10 @@ export interface DetectedNpmHost {
   ssl: boolean;
   /** NPM no ha podido cargar su configuración (archivo .conf.err). */
   error: boolean;
+  /** Si la configuración avanzada manda la portada a otro sitio, ese destino («http://casa.midominio.com:80»). */
+  root?: string | null;
+  /** Respaldo de la configuración avanzada para cuando el destino falla («http://172.21.0.10:3000»). */
+  fallback?: string | null;
 }
 
 export interface ServerStats {

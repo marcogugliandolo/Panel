@@ -203,8 +203,8 @@ export function WebsView({
 
   return (
     <div className="scrollbar-thin h-full overflow-y-auto">
-      <div className="mx-auto grid max-w-[1500px] gap-4 p-3 sm:p-4 lg:grid-cols-[320px_minmax(0,1fr)] lg:p-6">
-        <aside className="space-y-3 lg:sticky lg:top-0 lg:self-start" hidden={!listVisible}>
+      <div className="mx-auto grid max-w-[1500px] grid-cols-[minmax(0,1fr)] gap-4 p-3 sm:p-4 lg:grid-cols-[320px_minmax(0,1fr)] lg:p-6">
+        <aside className="min-w-0 space-y-3 lg:sticky lg:top-0 lg:self-start" hidden={!listVisible}>
           <div className="flex items-baseline justify-between gap-2">
             <h2 className="text-sm font-semibold">Webs</h2>
             <span className="text-xs text-ink-3">

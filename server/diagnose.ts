@@ -147,7 +147,8 @@ function checkTls(ip: string, url: URL): Promise<TlsResult> {
 }
 
 /** La página por defecto de NPM cuando le llega un dominio que no tiene configurado. */
-const looksLikeNpmDefault = (p: Probe) => /nginx proxy manager|congratulations!|you've successfully started the nginx/i.test(p.body);
+/** La página que enseña NPM a un dominio que no tiene configurado (no su propia web de administración). */
+const looksLikeNpmDefault = (p: Probe) => /congratulations!|you've successfully started the nginx proxy manager/i.test(p.body);
 const isNpmServer = (p: Probe) => /openresty/i.test(p.server ?? '');
 
 const PRIVATE_GATEWAY = /^(127\.|localhost$|host\.docker\.internal$|172\.(1[6-9]|2\d|3[01])\.\d+\.1$)/i;
@@ -176,6 +177,31 @@ const listensOn = (c: ContainerInfo, port: number) => parsePorts(c.ports).some((
 
 /** Cómo se ha encontrado el contenedor, para explicarlo en la ficha. */
 type FoundBy = 'name' | 'alias' | 'guess' | 'ip' | 'ip-memory' | 'port' | 'self';
+
+/** Palabras de un nombre de contenedor o de una web, para ver si dos son la misma aplicación. */
+const COMMON = new Set(['app', 'web', 'www', 'com', 'es', 'net', 'org', 'api', 'server', 'service', 'prod', 'main', 'default', 'docker']);
+function words(name: string | null | undefined): string[] {
+  return String(name ?? '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3 && !COMMON.has(t) && !/^\d+$/.test(t));
+}
+/** La parte propia de un dominio («salsanova» en salsanova.app, «facturas» en facturas.midominio.com). */
+function siteWords(hostname: string): string[] {
+  const labels = hostname.toLowerCase().split('.');
+  return words(labels.length > 2 ? labels.slice(0, -2).join(' ') : labels[0]);
+}
+const overlap = (a: string[], b: string[]) => a.some((x) => b.some((y) => x === y || x.includes(y) || y.includes(x)));
+/** ¿Parece la misma aplicación? (comparte palabras con el contenedor principal o con la web) */
+export function sameApp(candidate: string, main: string | null, hostname: string): boolean {
+  const c = words(candidate);
+  return overlap(c, words(main)) || overlap(c, siteWords(hostname));
+}
+/** En esa máquina, un contenedor que parezca de esta web y escuche en ese puerto (para sugerirlo). */
+export function similarContainer(server: ServerStats, hostname: string, port: number, not: ContainerInfo, main?: string | null): ContainerInfo | null {
+  const want = [...siteWords(hostname), ...words(main)];
+  return server.containers.find((c) => c.name !== not.name && c.state === 'running' && overlap(words(c.name), want) && listensOn(c, port)) ?? null;
+}
 
 /** De varios candidatos, el que escucha en el puerto de destino y, si no, el que está en marcha. */
 function best(list: ContainerInfo[], port: number): ContainerInfo {
@@ -504,12 +530,21 @@ export function createDiagnoser(db: DB, npm: NpmService, portainer?: PortainerSc
       return finish();
     }
     const npmGateway = isNpmServer(p) && (p.status === 502 || p.status === 503 || p.status === 504);
-    const forward = match ? `${match.host.forwardScheme}://${match.host.forwardHost}:${match.host.forwardPort}` : null;
+    // La configuración avanzada puede mandar la portada a otro destino distinto del de la ficha.
+    const root = match?.host.root ?? null;
+    const card = match ? `${match.host.forwardScheme}://${match.host.forwardHost}:${match.host.forwardPort}` : null;
+    const forward = root ? `${root.scheme}://${root.host}:${root.port}` : card;
     add(
       'proxy',
       proxyLabel,
       'ok',
-      match ? `Tiene ${hostname} activo y lo manda a ${forward}.` : isNpmServer(p) ? 'Responde (no está en ningún NPM que conozca el panel, así que no sé a dónde lo manda).' : `Responde (${p.server || 'servidor web'}).`,
+      match
+        ? root
+          ? `Tiene ${hostname} activo. Su configuración avanzada manda la portada a ${forward} (el destino de la ficha, ${card}, no se usa para ella).`
+          : `Tiene ${hostname} activo y lo manda a ${forward}.`
+        : isNpmServer(p)
+          ? 'Responde (no está en ningún NPM que conozca el panel, así que no sé a dónde lo manda).'
+          : `Responde (${p.server || 'servidor web'}).`,
     );
 
     /* 5. Contenedor de destino */
@@ -526,15 +561,19 @@ export function createDiagnoser(db: DB, npm: NpmService, portainer?: PortainerSc
           rememberIp: (serverId, ip) => containerForIp(db, serverId, ip),
         });
       };
-      const destOf = (m: Match) => `${m.host.forwardHost}:${m.host.forwardPort}`;
+      /** El salto tal como va de verdad la portada (configuración avanzada incluida). */
+      const routed = (m: Match): Match =>
+        m.host.root ? { ...m, host: { ...m.host, forwardScheme: m.host.root.scheme, forwardHost: m.host.root.host, forwardPort: m.host.root.port, root: null } } : m;
+      const destOf = (m: Match) => `${routed(m).host.forwardHost}:${routed(m).host.forwardPort}`;
+      const locateRouted = (m: Match, selfIps: string[]) => locate(routed(m), selfIps);
       let hop: Match = match;
-      let found = await locate(match, entryIps);
+      let found = await locateRouted(match, entryIps);
       let via = '';
       if (!found.container && found.external) {
         // Va a otra máquina: si allí hay otro NPM que el panel conoce con este dominio, se sigue por él.
         const next = nextHop ?? matches.find((m) => m !== match && m.instance.serverId !== match!.instance.serverId) ?? null;
         if (next) {
-          const second = await locate(next, found.ip ? [found.ip] : []);
+          const second = await locateRouted(next, found.ip ? [found.ip] : []);
           if (second.container || second.server) {
             via = ` Pasa por ${destOf(match)}, donde el Nginx Proxy Manager de ${next.instance.serverId ? serverName(next.instance.serverId) : next.instance.name} lo manda a ${destOf(next)}.`;
             hop = next;
@@ -544,7 +583,45 @@ export function createDiagnoser(db: DB, npm: NpmService, portainer?: PortainerSc
       }
       const { server, container, foundBy } = found;
       const dest = destOf(hop);
-      const label = container?.name ?? (found.external ? hop.host.forwardHost : dest);
+      const hopHost = routed(hop).host;
+      const label = container?.name ?? (found.external ? hopHost.forwardHost : dest);
+
+      // Avisos: una IP fija de NPM que Docker ha dado a otro contenedor, y el respaldo de la configuración avanzada.
+      const warnings: string[] = [];
+      const port = hopHost.forwardPort;
+      if (container && foundBy === 'ip' && container.state === 'running') {
+        const self = isNpmContainer(container) && !/^127\.|^localhost$/.test(hopHost.forwardHost);
+        if (self || (container.ports && !listensOn(container, port))) {
+          const better = server ? similarContainer(server, hostname, port, container) : null;
+          warnings.push(
+            `Ojo: ${hopHost.forwardHost} es ahora la IP de ${container.name}${self ? ', el propio Nginx Proxy Manager' : `, que no escucha en el ${port}`}. Docker cambia las IPs al reiniciar los contenedores${
+              better ? `; ${better.name} está ahora en ${better.ips?.[0] ?? '?'}` : ''
+            }. En NPM pon el nombre del contenedor${better ? ` (${better.name}:${port})` : ''} en lugar de la IP.`,
+          );
+        }
+      }
+      const fb = match.host.fallback;
+      if (fb) {
+        const fbMatch: Match = { ...match, host: { ...match.host, forwardScheme: fb.scheme, forwardHost: fb.host, forwardPort: fb.port, root: null, fallback: null } };
+        const r = await locate(fbMatch, entryIps);
+        const fbDest = `${fb.host}:${fb.port}`;
+        if (r.container) {
+          if (sameApp(r.container.name, container?.name ?? null, hostname)) {
+            warnings.push(`Respaldo si falla: ${fbDest} → ${r.container.name} en ${serverName(r.server?.serverId)}${r.container.state === 'running' ? '' : ' (parado)'}.`);
+          } else {
+            const better = r.server ? similarContainer(r.server, hostname, fb.port, r.container, container?.name) : null;
+            warnings.push(
+              `Ojo con el respaldo: ${fbDest} lleva ahora a ${r.container.name} en ${serverName(r.server?.serverId)}, que no parece la misma aplicación${
+                better ? ` (${better.name} está ahora en ${better.ips?.[0] ?? '?'})` : ''
+              }. Si el destino principal falla, saldría otra web. En el respaldo pon el nombre del contenedor${better ? ` (${better.name}:${fb.port})` : ''} en lugar de la IP.`,
+            );
+          }
+        } else if (!r.external) {
+          warnings.push(`Ojo con el respaldo: ${fbDest} no lleva a ningún contenedor que el panel conozca.`);
+        }
+      }
+      const notes = warnings.length ? ` ${warnings.join(' ')}` : '';
+      const hasWarning = warnings.some((w) => w.startsWith('Ojo'));
       // Por qué es este contenedor, cuando NPM no apunta a su nombre tal cual.
       const why =
         via ||
@@ -576,7 +653,7 @@ export function createDiagnoser(db: DB, npm: NpmService, portainer?: PortainerSc
                   : container.state === 'dead'
                     ? 'muerto (Docker no pudo pararlo bien)'
                     : container.state;
-        add('container', label, 'fail', `${container.name} está ${state} en ${where}${container.status ? ` · ${container.status}` : ''}.${why}`);
+        add('container', label, 'fail', `${container.name} está ${state} en ${where}${container.status ? ` · ${container.status}` : ''}.${why}${notes}`);
         const endpointId = server ? endpointOf(server.serverId) : null;
         if (endpointId) action = { kind: 'start-container', endpointId, container: container.name, serverName: where };
         skipRest(['app']);
@@ -584,7 +661,7 @@ export function createDiagnoser(db: DB, npm: NpmService, portainer?: PortainerSc
       }
       if (container) {
         containerRunning = container;
-        add('container', label, 'ok', `En marcha en ${serverName(server?.serverId)}${container.status ? ` · ${container.status}` : ''}.${why}`);
+        add('container', label, hasWarning ? 'warn' : 'ok', `En marcha en ${serverName(server?.serverId)}${container.status ? ` · ${container.status}` : ''}.${why}${notes}`);
       } else if (server && !server.online) {
         add('container', label, 'fail', `${serverName(server.serverId)}, donde está ${hop.host.forwardHost}, no envía datos desde hace ${minutesAgo(server.lastUpdated)}: está apagado o sin red.${via}`);
         skipRest(['app']);
@@ -639,7 +716,22 @@ export function createDiagnoser(db: DB, npm: NpmService, portainer?: PortainerSc
       return finish();
     }
     if (p.status >= 400) {
-      add('app', 'Aplicación', p.status === 401 || p.status === 403 ? 'warn' : 'fail', `Responde ${p.status}${p.status === 404 ? ': la página no existe en la aplicación' : p.status === 401 || p.status === 403 ? ': pide acceso (puede ser normal)' : ''}.`);
+      // 401/403/404/405 los da la propia aplicación: está viva (pide acceso, o es una API sin portada).
+      const alive = [401, 403, 404, 405].includes(p.status);
+      add(
+        'app',
+        'Aplicación',
+        alive ? 'ok' : 'fail',
+        `Responde ${p.status} en ${p.latencyMs ?? '?'} ms${
+          p.status === 404
+            ? ': la portada no existe, pero la aplicación contesta (normal en una API)'
+            : p.status === 401 || p.status === 403
+              ? ': pide acceso'
+              : p.status === 405
+                ? ': no admite una visita normal (normal en una API)'
+                : ''
+        }.`,
+      );
       return finish();
     }
     if (monitor.keyword && p.status < 300 && !p.body.includes(monitor.keyword)) {

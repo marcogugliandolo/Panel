@@ -121,10 +121,27 @@ leer_npm() {
       if (names == "") return
       n = split(names, arr, /[ \t]+/); d = ""
       for (i = 1; i <= n; i++) if (arr[i] != "") d = d (d == "" ? "" : ",") "\"" arr[i] "\""
+      root = (rootx != "" ? rootx : rootr); fallback = (fbname != "" && (fbname in fb) ? fb[fbname] : "")
       all = all (all == "" ? "" : ",") "{\"domains\":[" d "],\"host\":\"" host "\",\"port\":" (port ~ /^[0-9]+$/ ? port : 0) \
-        ",\"scheme\":\"" scheme "\",\"ssl\":" (ssl ? "true" : "false") ",\"error\":" (err ? "true" : "false") "}"
+        ",\"scheme\":\"" scheme "\",\"ssl\":" (ssl ? "true" : "false") ",\"error\":" (err ? "true" : "false") \
+        ",\"root\":\"" root "\",\"fallback\":\"" fallback "\"}"
     }
-    /^### / { out(); names = ""; host = ""; port = ""; scheme = "http"; ssl = 0; err = ($2 ~ /\.err$/); next }
+    /^### / { out(); names = ""; host = ""; port = ""; scheme = "http"; ssl = 0; err = ($2 ~ /\.err$/); loc = ""; rootx = ""; rootr = ""; fbname = ""; split("", fb); next }
+    /^[ \t]*#/ { next }
+    # Configuración avanzada: a dónde va de verdad la portada y el respaldo si el destino falla.
+    /^[ \t]*location[ \t]/ {
+      v = $0; loc = "o"
+      if (v ~ /location[ \t]+=[ \t]*\/[ \t]*\{/) loc = "x"
+      else if (v ~ /location[ \t]+\/[ \t]*\{/) loc = "r"
+      else if (match(v, /@[A-Za-z0-9_-]+/)) loc = substr(v, RSTART, RLENGTH)
+      next
+    }
+    /^[ \t]*proxy_pass[ \t]/ {
+      v = $2; sub(/;.*$/, "", v)
+      if (v !~ /\$/ && v ~ /^https?:\/\//) { if (loc == "x") rootx = v; else if (loc == "r" && rootr == "") rootr = v; else if (loc ~ /^@/) fb[loc] = v }
+      next
+    }
+    /^[ \t]*error_page[ \t]/ { if (match($0, /@[A-Za-z0-9_-]+/)) fbname = substr($0, RSTART, RLENGTH); next }
     /^[ \t]*server_name[ \t]/ { if (names == "") { v = $0; sub(/^[ \t]*server_name[ \t]+/, "", v); sub(/;.*$/, "", v); gsub(/["\\]/, "", v); names = v }; next }
     /^[ \t]*set[ \t]+\$server[ \t]/ { if (host == "") { v = $0; sub(/^[ \t]*set[ \t]+\$server[ \t]+/, "", v); sub(/;.*$/, "", v); gsub(/["\\ \t]/, "", v); host = v }; next }
     /^[ \t]*set[ \t]+\$port[ \t]/ { if (port == "") { v = $3; sub(/;.*$/, "", v); gsub(/"/, "", v); port = v }; next }
@@ -164,6 +181,8 @@ leer_trafico_npm() {
   done
   # Formato de NPM: [25/Nov/2026:10:15:32 +0000] - 502 502 - GET https dominio "/ruta" [Client …] …
   NPM_TRAFFIC=$(awk '
+    # Las comprobaciones automáticas (este panel, Uptime Kuma…) no son visitas reales.
+    /ServerPanel-Monitor|Uptime-Kuma|UptimeRobot|StatusCake|Pingdom/ { next }
     substr($0, 1, 1) == "[" {
       rb = index($0, "]"); t = substr($0, 2, rb - 2)
       rest = substr($0, rb + 2); p = index(rest, " - "); if (!p) next

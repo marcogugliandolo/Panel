@@ -140,7 +140,13 @@ const DEFAULT_WEBS: [string, string][] = [
   ['portainer.marcogugliandolo.com', 'https://portainer.marcogugliandolo.com'],
 ];
 
-/** ¿Responde bien esta URL ahora mismo? (mismo criterio que las comprobaciones: 2xx o 3xx) */
+/**
+ * ¿La aplicación está viva? 2xx y 3xx, y también 401, 403, 404 y 405: los da la propia aplicación
+ * (pide acceso, o es una API sin portada), así que responde aunque no sea una página normal.
+ */
+export const isAlive = (status: number) => (status >= 200 && status < 400) || [401, 403, 404, 405].includes(status);
+
+/** ¿Responde bien esta URL ahora mismo? (mismo criterio que las comprobaciones) */
 export async function probeUrl(url: string, timeoutMs = 10_000): Promise<{ ok: boolean; status: number | null; error: string | null }> {
   try {
     const response = await fetch(url, {
@@ -149,7 +155,7 @@ export async function probeUrl(url: string, timeoutMs = 10_000): Promise<{ ok: b
       signal: AbortSignal.timeout(timeoutMs),
     });
     await response.body?.cancel().catch(() => undefined);
-    const ok = response.status >= 200 && response.status < 400;
+    const ok = isAlive(response.status);
     return { ok, status: response.status, error: ok ? null : `Respuesta HTTP ${response.status}` };
   } catch (caught) {
     return { ok: false, status: null, error: describeError(caught, timeoutMs) };
@@ -191,9 +197,9 @@ export function createMonitorService(db: DB) {
       });
       latency = Math.round(performance.now() - started);
       statusCode = response.status;
-      ok = response.status >= 200 && response.status < 400;
+      ok = isAlive(response.status);
       if (!ok) error = `Respuesta HTTP ${response.status}`;
-      if (ok && monitor.keyword) {
+      if (ok && monitor.keyword && response.status < 400) {
         const body = await response.text();
         if (!body.includes(monitor.keyword)) {
           ok = false;

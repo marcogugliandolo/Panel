@@ -40,7 +40,7 @@ async function main() {
   const auth = createAuth(db);
   const monitors = createMonitorService(db);
   const npm = createNpmService(db, monitors);
-  const portainerScan = createPortainerScan(db);
+  const portainerScan = createPortainerScan(db, (samples) => monitors.webHistory.addTraffic(samples));
   npm.setExtraDetected(() => portainerScan.npmServers());
   monitors.setDiagnoser(createDiagnoser(db, npm, portainerScan));
   const webScope = createWebScope(db, { monitors, npm });

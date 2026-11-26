@@ -570,7 +570,7 @@ export function createScene(o: SceneOptions) {
 
   const RECEP = {
     key: RECEPTION_KEY, serverId: RECEPTION_KEY, title: 'Recepción', cx: 320, topY: 146, bx: 300, floor: 'baja', stand: [20, 11], online: true,
-    look: lookFor(RECEPTION_KEY), webs: [], task: null, bubble: null, nextChat: Date.now() + 2500, doing: 'Atendiendo el teléfono',
+    look: lookFor(RECEPTION_KEY), webs: [], allWebs: [], task: null, bubble: null, nextChat: Date.now() + 2500, doing: 'Atendiendo el teléfono',
     anim: newAnim(), plates: [], bubbles: [],
   };
   const BOSS = { cx: 120, topY: 242, bx: 270 };
@@ -715,7 +715,10 @@ export function createScene(o: SceneOptions) {
     const order = servers.map((s) => s.key);
     const sorted = new Map([...byKey.entries()].sort((x, y) => order.indexOf(x[0]) - order.indexOf(y[0])));
     byKey.clear(); for (const [k, v] of sorted) byKey.set(k, v);
-    RECEP.webs = webs.slice(0, 4);
+    // En el mostrador caben 4 pantallas (primero las caídas); lo que dice la recepcionista cuenta todas.
+    const ordered = [...webs].sort((a, b) => Number(b.down) - Number(a.down));
+    RECEP.webs = ordered.slice(0, 4);
+    RECEP.allWebs = webs;
     if (changed) relayout(); else refreshPlates();
   }
 
@@ -1093,11 +1096,15 @@ export function createScene(o: SceneOptions) {
     const t = pickActivity(a); a.doing = t; say(a, t, '', 4200); a.nextChat = now + rnd(10000, 19000);
   }
   function recepChatter(now) {
-    const R = RECEP; if (R.task || now < R.nextChat || !R.webs.length) return;
-    const down = R.webs.filter((w) => w.down);
-    if (down.length) { say(R, `¡${down[0].name} no contesta!`, 'bad', 3800); R.doing = `${down[0].name} no contesta`; R.nextChat = now + 5200; return; }
-    const w = pick(R.webs);
-    const t = Math.random() < 0.35 || w.latencyMs === null ? `Las ${R.webs.length} webs contestan` : `${w.name} contesta en ${Math.round(w.latencyMs)} ms`;
+    const R = RECEP; const all = R.allWebs?.length ? R.allWebs : R.webs;
+    if (R.task || now < R.nextChat || !all.length) return;
+    const down = all.filter((w) => w.down);
+    if (down.length) {
+      const t = down.length === 1 ? `¡${down[0].name} no contesta!` : `¡${down.length} webs no contestan!`;
+      say(R, t, 'bad', 3800); R.doing = down.length === 1 ? `${down[0].name} no contesta` : `${down.length} webs no contestan`; R.nextChat = now + 5200; return;
+    }
+    const w = pick(all);
+    const t = Math.random() < 0.35 || w.latencyMs === null ? (all.length === 1 ? 'La web contesta' : `Las ${all.length} webs contestan`) : `${w.name} contesta en ${Math.round(w.latencyMs)} ms`;
     say(R, t, '', 4000); R.doing = t; R.nextChat = now + rnd(12000, 20000);
   }
   function animate(a, dt, now, busy) {

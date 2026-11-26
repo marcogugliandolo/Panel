@@ -2,6 +2,7 @@ import express from 'express';
 import type { ContainerInfo, DetectedNpmHost, HistoryRange, MetricPoint, ServerStats } from '../../shared/types';
 import { config } from '../config';
 import type { DB } from '../db';
+import { parseProxyPass } from '../npmConf';
 import { parseNginxMinute, type TrafficSample } from '../incidents';
 
 const SERVER_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
@@ -97,6 +98,8 @@ function toNpmHosts(value: unknown[]): DetectedNpmHost[] {
       scheme: r.scheme === 'https' ? 'https' : 'http',
       ssl: r.ssl === true,
       error: r.error === true,
+      root: parseProxyPass(r.root as string) ? String(r.root) : null,
+      fallback: parseProxyPass(r.fallback as string) ? String(r.fallback) : null,
     });
   }
   return hosts;
