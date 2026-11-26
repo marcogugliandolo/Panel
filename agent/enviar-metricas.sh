@@ -15,6 +15,9 @@
 # Cron, cada minuto (en /etc/crontab):
 #   * * * * * root /root/monitor.sh > /dev/null 2>&1
 
+# Si el cron lo lanza con «sh script» (dash), se vuelve a lanzar con bash: lo necesita.
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
+
 export PATH="$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export LC_ALL=C
 set -o pipefail
@@ -35,6 +38,8 @@ case "$ENVIOS_POR_MINUTO" in '' | *[!0-9]* | 0) ENVIOS_POR_MINUTO=1 ;; esac
 
 if [ -z "$SERVER_ID" ]; then
   echo "Error: falta SERVER_ID (defínelo en $ENV_FILE)" >&2
+  # El cron descarta la salida: que quede también en el registro del sistema (journalctl -t server-panel).
+  command -v logger > /dev/null 2>&1 && logger -t server-panel "Falta SERVER_ID en $ENV_FILE: no se envían métricas al panel"
   exit 1
 fi
 
