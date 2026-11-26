@@ -1,4 +1,4 @@
-import { ChevronLeft, ExternalLink, Filter, Play, RefreshCw, Trash2, Undo2, Waypoints, X } from 'lucide-react';
+import { ChevronLeft, ExternalLink, Filter, Play, RefreshCw, Search, Trash2, Undo2, Waypoints, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HistoryRange, Monitor, MonitorHistoryPoint, WebIncident, WebTrafficPoint } from '../../../shared/types';
 import { api } from '../../api';
@@ -37,6 +37,24 @@ function uptimeTone(uptime: number | null, hadOutage?: boolean): string {
   if (uptime >= 99.95) return 'bg-ok/70';
   return 'bg-warn/80';
 }
+
+/**
+ * Nombre de una web con la parte propia destacada y el dominio atenuado («bbdd» + «.midominio.com»):
+ * si no cabe, lo que se recorta es lo que se repite en todas.
+ */
+function SiteName({ name }: { name: string }) {
+  const labels = name.split('.');
+  if (labels.length <= 2) return <>{name}</>;
+  return (
+    <>
+      <span className="text-ink">{labels.slice(0, -2).join('.')}</span>
+      <span className="text-ink-3">.{labels.slice(-2).join('.')}</span>
+    </>
+  );
+}
+
+/** Color del punto de estado de cada web en la lista. */
+const DOT: Record<string, string> = { ok: 'bg-ok', warn: 'bg-warn', bad: 'bg-bad', idle: 'bg-ink-3' };
 
 /** Tooltip sobre la barra, sin salirse por los lados: en los extremos se ancla al borde. */
 function tooltipPos(index: number, count: number): React.CSSProperties {
@@ -92,6 +110,20 @@ export function WebsView({
     [monitors],
   );
   const selected = sorted.find((m) => m.id === selectedId) ?? null;
+  const [query, setQuery] = useState('');
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? sorted.filter((m) => m.name.toLowerCase().includes(q) || m.url.toLowerCase().includes(q)) : sorted;
+  }, [sorted, query]);
+  // Grupos: primero las que tienen problemas, luego las que funcionan.
+  const groups = useMemo(() => {
+    const bad = shown.filter((m) => m.status === 'down' || m.status === 'warning');
+    const good = shown.filter((m) => m.status !== 'down' && m.status !== 'warning');
+    return [
+      { key: 'bad', title: 'Con problemas', items: bad },
+      { key: 'good', title: bad.length ? 'Funcionan' : '', items: good },
+    ].filter((g) => g.items.length);
+  }, [shown]);
 
   // En pantalla ancha, sin web elegida se abre la primera (la caída, si la hay).
   useEffect(() => {
@@ -108,9 +140,10 @@ export function WebsView({
   const down = sorted.filter((m) => m.status === 'down').length;
 
   return (
-    <div className="scrollbar-thin h-full overflow-y-auto">
-      <div className="mx-auto grid max-w-[1500px] grid-cols-[minmax(0,1fr)] gap-4 p-3 sm:p-4 lg:grid-cols-[320px_minmax(0,1fr)] lg:p-6">
-        <aside className="min-w-0 space-y-3 lg:sticky lg:top-0 lg:self-start" hidden={!listVisible}>
+    // En pantalla ancha, la lista y la ficha son dos paneles con su propio scroll (como un correo).
+    <div className="scrollbar-thin h-full overflow-y-auto lg:overflow-hidden">
+      <div className="mx-auto grid max-w-[1500px] grid-cols-[minmax(0,1fr)] gap-4 p-3 sm:p-4 lg:h-full lg:grid-cols-[300px_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)] xl:grid-cols-[330px_minmax(0,1fr)] lg:gap-5 lg:px-6 lg:pt-5 lg:pb-0">
+        <aside className="flex min-w-0 flex-col gap-2.5 lg:min-h-0 lg:pb-5" hidden={!listVisible}>
           <div className="flex items-baseline justify-between gap-2">
             <h2 className="text-sm font-semibold">Webs</h2>
             <span className="text-xs text-ink-3">
@@ -118,15 +151,28 @@ export function WebsView({
               {down > 0 && <span className="text-bad">{down} caídas</span>}
             </span>
           </div>
+          {sorted.length > 6 && (
+            <label className="relative block">
+              <span className="sr-only">Buscar una web</span>
+              <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-ink-3" aria-hidden />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Buscar web…"
+                className="h-8 w-full rounded-[9px] border border-line bg-surface pr-2.5 pl-8 text-[13px] text-ink placeholder:text-ink-3 focus:border-line-strong focus:outline-none"
+              />
+            </label>
+          )}
           {lastPruned && (
-            <div className="flex items-start gap-2.5 rounded-[12px] border border-line bg-surface px-3 py-2.5">
+            <div className="flex shrink-0 items-start gap-2.5 rounded-[12px] border border-line bg-surface px-3 py-2">
               <Filter size={14} className="mt-0.5 shrink-0 text-ink-3" aria-hidden />
               <p className="min-w-0 flex-1 text-[12px] text-ink-2">
                 <span className="font-medium text-ink">
                   {lastPruned.names.length === 1 ? 'Quitada 1 web que ya no está en tus proxys' : `Quitadas ${lastPruned.names.length} webs que ya no están en tus proxys`}
                 </span>{' '}
                 <span className="text-ink-3">· {timeAgo(lastPruned.at, now)}</span>
-                <span className="mt-0.5 block break-words text-ink-3">{lastPruned.names.join(', ')}</span>
+                <span className="mt-0.5 line-clamp-2 block break-words text-ink-3">{lastPruned.names.join(', ')}</span>
               </p>
               <button type="button" aria-label="Cerrar aviso" onClick={() => setSeenPruned(lastPruned.at)} className="-m-1 rounded p-1 text-ink-3 hover:bg-white/5 hover:text-ink">
                 <X size={13} aria-hidden />
@@ -134,67 +180,87 @@ export function WebsView({
             </div>
           )}
           {lastRestored && (
-            <div className="flex items-start gap-2.5 rounded-[12px] border border-ok/25 bg-ok/[0.05] px-3 py-2.5">
+            <div className="flex shrink-0 items-start gap-2.5 rounded-[12px] border border-ok/25 bg-ok/[0.05] px-3 py-2">
               <Undo2 size={14} className="mt-0.5 shrink-0 text-ok" aria-hidden />
               <p className="min-w-0 flex-1 text-[12px] text-ink-2">
                 <span className="font-medium text-ink">
                   {lastRestored.names.length === 1 ? 'Vuelve 1 web: responde otra vez' : `Vuelven ${lastRestored.names.length} webs: responden otra vez`}
                 </span>{' '}
                 <span className="text-ink-3">· {timeAgo(lastRestored.at, now)}</span>
-                <span className="mt-0.5 block break-words text-ink-3">{lastRestored.names.join(', ')}</span>
+                <span className="mt-0.5 line-clamp-2 block break-words text-ink-3">{lastRestored.names.join(', ')}</span>
               </p>
               <button type="button" aria-label="Cerrar aviso" onClick={() => setSeenRestored(lastRestored.at)} className="-m-1 rounded p-1 text-ink-3 hover:bg-white/5 hover:text-ink">
                 <X size={13} aria-hidden />
               </button>
             </div>
           )}
-          <ul className="overflow-hidden rounded-[12px] border border-line bg-surface">
-            {monitors === null && <li className="px-3 py-3 text-sm text-ink-3">Cargando…</li>}
-            {monitors?.length === 0 && <li className="px-3 py-3 text-sm text-ink-3">Aún no hay webs vigiladas.</li>}
-            {sorted.map((m) => {
-              const meta = MONITOR_META[m.status];
-              const active = m.id === selectedId;
-              const row = bars.data?.[m.id];
-              return (
-                <li key={m.id} className="border-t border-line first:border-t-0">
-                  <button
-                    type="button"
-                    onClick={() => open(m.id)}
-                    aria-current={(active && wide) || undefined}
-                    className={cn('w-full px-3 py-3 text-left transition-colors lg:py-2.5', active && wide ? 'bg-white/[0.06]' : 'hover:bg-white/[0.03]')}
-                  >
-                    <span className="flex items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{m.name}</span>
-                      <StatusBadge tone={meta.tone} label={meta.label} />
-                    </span>
-                    <span className="mt-1.5 flex items-center gap-2">
-                      <span className="flex h-3.5 flex-1 items-end gap-[2px]" aria-hidden>
-                        {(row ?? Array.from({ length: 24 }, () => ({ t: 0, uptime: null }))).map((b, i) => (
-                          <span key={i} className={cn('h-full flex-1 rounded-[2px]', uptimeTone(b.uptime))} />
-                        ))}
-                      </span>
-                      <span className="w-12 text-right font-mono text-[11px] text-ink-3">{formatPercent(m.uptime24h, 1)}</span>
-                    </span>
-                    {m.status === 'down' && m.diagnosis && !m.diagnosis.ok && (
-                      <span className="mt-1 block truncate text-[11.5px] font-medium text-bad">{m.diagnosis.title}</span>
-                    )}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-          <button
-            type="button"
-            onClick={() => setNpmOpen(true)}
-            className="flex w-full items-center gap-2 rounded-[10px] border border-line px-3 py-2 text-left text-[12.5px] text-ink-2 transition-colors hover:border-line-strong hover:bg-white/[0.03] hover:text-ink"
-          >
-            <Waypoints size={14} className="shrink-0 text-ink-3" aria-hidden />
-            Nginx Proxy Manager
-          </button>
-          <p className="text-[11.5px] text-ink-3">Barras: últimas 24 horas, una por hora.</p>
+          <div className="scrollbar-thin overflow-hidden rounded-[12px] border border-line bg-surface lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+            {monitors === null && <p className="px-3 py-3 text-sm text-ink-3">Cargando…</p>}
+            {monitors?.length === 0 && <p className="px-3 py-3 text-sm text-ink-3">Aún no hay webs vigiladas.</p>}
+            {monitors && monitors.length > 0 && shown.length === 0 && <p className="px-3 py-3 text-sm text-ink-3">Ninguna web con «{query}».</p>}
+            {groups.map((g) => (
+              <section key={g.key} aria-label={g.title || 'Webs'}>
+                {g.title && (
+                  <h3 className="sticky top-0 z-[1] flex items-center justify-between border-b border-line bg-surface/95 px-3 py-1.5 text-[10.5px] font-semibold tracking-wider text-ink-3 uppercase backdrop-blur">
+                    {g.title}
+                    <span className="font-mono">{g.items.length}</span>
+                  </h3>
+                )}
+                <ul>
+                  {g.items.map((m) => {
+                    const meta = MONITOR_META[m.status];
+                    const active = m.id === selectedId;
+                    const row = bars.data?.[m.id];
+                    const problem = (m.status === 'down' || m.status === 'warning') && m.diagnosis && !m.diagnosis.ok ? m.diagnosis.title : null;
+                    return (
+                      <li key={m.id} className="border-t border-line/60 first:border-t-0">
+                        <button
+                          type="button"
+                          onClick={() => open(m.id)}
+                          aria-current={(active && wide) || undefined}
+                          title={m.name}
+                          className={cn(
+                            'relative flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors',
+                            active && wide ? 'bg-white/[0.07]' : 'hover:bg-white/[0.03]',
+                          )}
+                        >
+                          {active && wide && <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-accent" aria-hidden />}
+                          <span className={cn('size-2 shrink-0 rounded-full', DOT[meta.tone] ?? 'bg-ink-3')} aria-hidden />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[13px] leading-5">
+                              <SiteName name={m.name} />
+                            </span>
+                            {problem && <span className="block truncate text-[11px] leading-4 font-medium text-bad">{problem}</span>}
+                            <span className="sr-only">{meta.label}</span>
+                          </span>
+                          <span className="flex h-3 w-[60px] shrink-0 items-end gap-px" aria-hidden>
+                            {(row ?? Array.from({ length: 24 }, () => ({ t: 0, uptime: null }))).map((b, i) => (
+                              <span key={i} className={cn('h-full flex-1 rounded-[1px]', uptimeTone(b.uptime))} />
+                            ))}
+                          </span>
+                          <span className="w-10 shrink-0 text-right font-mono text-[10.5px] text-ink-3 tabular-nums">{formatPercent(m.uptime24h, 1)}</span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ))}
+          </div>
+          <div className="flex shrink-0 items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setNpmOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-[8px] px-2 py-1.5 text-[12px] text-ink-2 transition-colors hover:bg-white/[0.04] hover:text-ink"
+            >
+              <Waypoints size={13} className="shrink-0 text-ink-3" aria-hidden />
+              Proxys
+            </button>
+            <span className="text-[11px] text-ink-3">Barras: últimas 24 h</span>
+          </div>
         </aside>
 
-        <div className="min-w-0" hidden={!detailVisible}>
+        <div className="scrollbar-thin min-w-0 lg:min-h-0 lg:overflow-y-auto lg:pr-1 lg:pb-5" hidden={!detailVisible}>
           {!wide && (
             <button type="button" onClick={() => setShowDetail(false)} className="mb-3 inline-flex items-center gap-1 py-1 text-[13px] text-ink-2 hover:text-ink">
               <ChevronLeft size={16} aria-hidden /> Todas las webs
@@ -453,13 +519,14 @@ function WebDetail({ monitor, onChange, onRemoved, now }: { monitor: Monitor; on
         <UptimeBars points={history.data?.points ?? null} bucketMs={history.data?.bucketMs ?? 0} incidents={list} range={range} now={now} />
       </Card>
 
-      <Card title="Cortes" aside={<span className="text-xs text-ink-3">Dos comprobaciones fallidas seguidas abren un corte</span>}>
-        <IncidentList incidents={incidents.data} now={now} />
-      </Card>
-
-      <Card title="Visitas reales" aside={<span className="text-xs text-ink-3">De los logs de Nginx Proxy Manager</span>}>
-        <TrafficChart traffic={traffic.data} range={range} now={now} />
-      </Card>
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-2">
+        <Card title="Cortes" aside={<span className="text-xs text-ink-3">Dos fallos seguidos abren un corte</span>}>
+          <IncidentList incidents={incidents.data} now={now} />
+        </Card>
+        <Card title="Visitas reales" aside={<span className="text-xs text-ink-3">De los registros del proxy</span>}>
+          <TrafficChart traffic={traffic.data} range={range} now={now} />
+        </Card>
+      </div>
     </div>
   );
 }

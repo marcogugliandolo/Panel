@@ -141,7 +141,8 @@ export function Header({
           <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2.5 py-2 max-[380px]:px-2 sm:px-3 md:px-4" role="status" aria-live="polite">
             <ShieldCheck size={16} className={state.color} aria-hidden />
             <span aria-hidden className="hidden font-mono text-xs tracking-widest text-[#8e9299] uppercase md:inline [@media(max-height:500px)]:hidden">
-              Estado: <span className={cn('font-bold', state.color)}>{state.label}</span>
+              <span className="lg:max-xl:hidden">Estado: </span>
+              <span className={cn('font-bold', state.color)}>{state.label}</span>
             </span>
             <span className="sr-only">Estado: {state.label}</span>
           </div>

@@ -81,10 +81,13 @@ export function RouteAnimation({
   const failIndex = nodes.findIndex((n) => n.status === 'fail');
   const [boxRef, boxWidth] = useWidth<HTMLDivElement>();
   // En pantallas estrechas la ruta va de arriba abajo, con la explicación de cada paso al lado.
-  const vertical = boxWidth > 0 && boxWidth < 600;
-  const width = vertical ? Math.max(280, boxWidth) : PAD * 2 + GAP * (nodes.length - 1);
+  // En horizontal, la separación entre pasos se ajusta al ancho que hay (entre 84 y 128 px); si no
+  // caben ni con la mínima, la ruta va de arriba abajo.
+  const gap = boxWidth > 0 ? Math.max(84, Math.min(GAP, (boxWidth - PAD * 2) / Math.max(1, nodes.length - 1))) : GAP;
+  const vertical = boxWidth > 0 && boxWidth < PAD * 2 + 84 * (nodes.length - 1);
+  const width = vertical ? Math.max(280, boxWidth) : PAD * 2 + gap * (nodes.length - 1);
   const height = vertical ? VPAD * 2 + VGAP * (nodes.length - 1) + 8 : 132;
-  const at = (pos: number) => (vertical ? { x: VX, y: VPAD + pos * VGAP } : { x: PAD + pos * GAP, y: CY });
+  const at = (pos: number) => (vertical ? { x: VX, y: VPAD + pos * VGAP } : { x: PAD + pos * gap, y: CY });
   /** Hasta dónde llega la visita: justo antes del corte, o hasta la aplicación. */
   const end = failIndex === -1 ? nodes.length - 1 : failIndex - 0.42;
 
@@ -162,7 +165,7 @@ export function RouteAnimation({
         <svg
           viewBox={`0 0 ${width} ${height}`}
           className="block h-auto w-full"
-          style={vertical ? undefined : { minWidth: Math.min(width, 640) }}
+          style={vertical ? undefined : { maxWidth: width, marginInline: 'auto' }}
           role="img"
           aria-label={diagnosis ? `Ruta de la visita: ${diagnosis.title}` : 'Ruta de la visita, aún sin comprobar'}
         >
@@ -219,7 +222,7 @@ export function RouteAnimation({
                 {vertical ? (
                   <rect x={0} y={c.y - VGAP / 2 + 2} width={width} height={VGAP - 4} fill="transparent" />
                 ) : (
-                  <rect x={c.x - GAP / 2 + 6} y={4} width={GAP - 12} height={height - 8} fill="transparent" />
+                  <rect x={c.x - gap / 2 + 6} y={4} width={gap - 12} height={height - 8} fill="transparent" />
                 )}
                 {isSel && <circle cx={c.x} cy={c.y} r={R + 6} fill="none" stroke="var(--color-ink-3)" strokeWidth={1} strokeDasharray="2 3" />}
                 {n.status === 'fail' && !REDUCED && <circle cx={c.x} cy={c.y} r={R} fill="none" stroke="var(--color-bad)" strokeWidth={2} className="route-pulse" />}
@@ -254,7 +257,7 @@ export function RouteAnimation({
                       {n.kind}
                     </text>
                     <text x={c.x} y={c.y + R + 34} textAnchor="middle" className={isSel ? 'fill-ink' : 'fill-ink-2'} style={{ fontSize: 12, fontWeight: 500 }}>
-                      {short(n.label)}
+                      {short(n.label, Math.max(8, Math.floor(gap / 7)))}
                     </text>
                     {n.status === 'fail' && (
                       <text x={c.x} y={c.y + R + 50} textAnchor="middle" style={{ fontSize: 10.5, fontWeight: 600 }} className="fill-bad">
