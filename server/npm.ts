@@ -264,24 +264,33 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
   function detectedServers() {
     const titles = new Map<string, string>();
     for (const n of readLayout(db).layout.nodes) if (n.serverId && !titles.has(n.serverId)) titles.set(n.serverId, n.title || n.serverId);
+    // NPM (en Docker) y Apache instalado como proxy inverso, tal como los envía el script de cada servidor.
     const fromScript = readAllStats(db)
-      .filter((s) => s.npmHosts)
+      .filter((s) => s.npmHosts || s.apacheHosts?.length)
       .map((s) => ({
         serverId: s.serverId,
+        kind: (s.npmHosts?.length ? 'npm' : 'apache') as 'npm' | 'apache',
         title: titles.get(s.serverId) ?? s.hostname ?? s.serverId,
         online: s.online,
         at: s.lastUpdated,
-        hosts: s.npmHosts!.map(toDetected),
+        hosts: [...(s.npmHosts ?? []), ...(s.apacheHosts ?? [])].map(toDetected),
       }));
     const fromPortainer = extraDetected()
-      .filter((e) => !fromScript.some((d) => d.serverId === e.serverId))
-      .map((e) => ({ ...e, title: titles.get(e.serverId) ?? e.title, hosts: e.hosts.map(toDetected) }));
-    return [...fromScript, ...fromPortainer];
+      .filter((e) => !fromScript.some((d) => d.serverId === e.serverId && d.kind === 'npm'))
+      .map((e) => ({ ...e, kind: 'npm' as const, title: titles.get(e.serverId) ?? e.title, hosts: e.hosts.map(toDetected) }));
+    // Si un servidor tiene los dos (Apache por el script y NPM por Portainer), se juntan.
+    const merged = [...fromScript];
+    for (const e of fromPortainer) {
+      const same = merged.find((d) => d.serverId === e.serverId);
+      if (same) Object.assign(same, { kind: 'npm', hosts: [...e.hosts, ...same.hosts] });
+      else merged.push(e);
+    }
+    return merged;
   }
   type Detected = ReturnType<typeof detectedServers>[number];
   const detectedInfo = (d: Detected): NpmInstanceInfo => ({
     id: 0,
-    name: `NPM ${d.title}`,
+    name: `${d.kind === 'apache' ? 'Apache' : 'NPM'} ${d.title}`,
     url: '',
     email: '',
     serverId: d.serverId,
@@ -305,7 +314,7 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
       }
       const all = d.hosts.flatMap((h) => h.domains);
       const wanted = new Set(known ? all.filter((x) => !known!.includes(x)) : all);
-      if (wanted.size) importDomains(`NPM ${d.title}`, d.hosts, wanted);
+      if (wanted.size) importDomains(detectedInfo(d).name, d.hosts, wanted);
       db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, JSON.stringify(all));
     }
   }
@@ -421,7 +430,7 @@ export function createNpmService(db: DB, monitors: { add(name: string, url: stri
       return;
     }
     const wanted = new Set<string>((Array.isArray(req.body?.domains) ? req.body.domains : []).map((x: unknown) => String(x).toLowerCase()));
-    res.json({ added: importDomains(`NPM ${d.title}`, d.hosts, wanted) });
+    res.json({ added: importDomains(detectedInfo(d).name, d.hosts, wanted) });
   });
   router.put('/detected/:serverId', (req, res) => {
     const d = findDetected(req.params.serverId);

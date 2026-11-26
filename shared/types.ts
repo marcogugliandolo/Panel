@@ -53,6 +53,8 @@ export interface ServerStats {
   ips: string[];
   /** Proxy hosts del Nginx Proxy Manager de este servidor, leídos por el script de sus archivos (null si no tiene). */
   npmHosts: DetectedNpmHost[] | null;
+  /** Sitios de un Apache instalado en la máquina como proxy inverso (mismo formato que NPM). */
+  apacheHosts?: DetectedNpmHost[] | null;
   /** Milisegundos desde epoch del último envío del script. */
   lastUpdated: number;
   /** false si lleva más de OFFLINE_AFTER_MINUTES sin enviar datos. */

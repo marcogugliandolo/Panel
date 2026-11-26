@@ -82,6 +82,44 @@ leer_red_docker() {
   done < <(docker inspect -f '{{.Name}}|{{index .Config.Labels "com.docker.compose.service"}}|{{range $n, $c := .NetworkSettings.Networks}}{{$c.IPAddress}};{{range $c.Aliases}}{{.}} {{end}};{{end}}|{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}{{.HostPort}}->{{$p}} {{end}}{{end}}' $ids 2> /dev/null)
 }
 
+# Apache instalado en la máquina como proxy inverso (sin Docker): sus webs y a dónde manda cada una,
+# leído de sus sitios activos. Así el panel lo trata como un proxy más, igual que Nginx Proxy Manager.
+leer_apache() {
+  APACHE_FOUND=""
+  APACHE_JSON=""
+  local dir
+  for dir in /etc/apache2/sites-enabled /etc/httpd/conf.d /etc/httpd/sites-enabled; do
+    [ -d "$dir" ] || continue
+    APACHE_FOUND=1
+    APACHE_JSON=$(for f in "$dir"/*.conf; do [ -f "$f" ] && { echo "### $f"; cat "$f"; }; done 2> /dev/null | awk '
+      function flush(   n, i, d, arr, url, rest, scheme, host, port, c) {
+        if (names == "") return
+        n = split(names, arr, " "); d = ""
+        for (i = 1; i <= n; i++) if (arr[i] ~ /^[A-Za-z0-9*.-]+$/ && arr[i] ~ /\./) d = d (d == "" ? "" : ",") "\"" tolower(arr[i]) "\""
+        if (d == "") return
+        scheme = "http"; host = ""; port = 0; url = target
+        if (url ~ /^https?:\/\//) {
+          c = index(url, "://"); scheme = substr(url, 1, c - 1); rest = substr(url, c + 3); sub(/\/.*$/, "", rest)
+          host = rest; port = (scheme == "https" ? 443 : 80)
+          if (index(rest, ":")) { host = substr(rest, 1, index(rest, ":") - 1); port = substr(rest, index(rest, ":") + 1) }
+        }
+        all = all (all == "" ? "" : ",") "{\"domains\":[" d "],\"host\":\"" tolower(host) "\",\"port\":" (port ~ /^[0-9]+$/ ? port : 0) \
+          ",\"scheme\":\"" scheme "\",\"ssl\":" (ssl ? "true" : "false") ",\"error\":false}"
+      }
+      /^[ \t]*#/ { next }
+      { k = tolower($1) }
+      k ~ /^<virtualhost/ { names = ""; target = ""; ssl = ($0 ~ /:443/); next }
+      k == "</virtualhost>" { flush(); names = ""; next }
+      k == "servername" { names = names " " $2; next }
+      k == "serveralias" { for (i = 2; i <= NF; i++) names = names " " $i; next }
+      k == "sslengine" && tolower($2) == "on" { ssl = 1; next }
+      k == "proxypass" { p = $2; t = $3; gsub(/"/, "", p); gsub(/"/, "", t); if (p == "/" && target == "" && t ~ /^https?:\/\//) target = t; next }
+      k == "rewriterule" && (index($0, "[P") || index($0, ",P]") || index($0, ",P,")) { t = $3; gsub(/"/, "", t); if (target == "" && t ~ /^https?:\/\//) target = t; next }
+      END { print all }')
+    break
+  done
+}
+
 # Nginx Proxy Manager de este servidor (si lo hay): qué dominio manda a qué contenedor y puerto.
 # Se lee de sus archivos de configuración (/data/nginx/proxy_host/*.conf), sin usuario ni contraseña.
 # Un archivo .conf.err es un host que NPM no ha podido cargar (error de configuración).
@@ -291,6 +329,8 @@ enviar() {
   NPM_PART=""
   [ -n "$NPM_FOUND" ] && NPM_PART=",\"npm\":[${NPM_JSON}]"
   [ -n "$NPM_TRAFFIC" ] && NPM_PART="${NPM_PART},\"npmTraffic\":[${NPM_TRAFFIC}]"
+  leer_apache
+  [ -n "$APACHE_FOUND" ] && NPM_PART="${NPM_PART},\"apache\":[${APACHE_JSON}]"
 
   PAYLOAD="{\"cpu\":${CPU},\"ram\":${RAM},\"disk\":${DISK},\"uptime\":${UPTIME},\"hostname\":\"$(json_str "$HOST")\",\"ips\":[${IPS}],\"containers\":[${CONTAINERS}]${NPM_PART}}"
 

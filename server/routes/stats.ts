@@ -29,6 +29,7 @@ interface StatsRow {
   containers: string | null;
   ips: string | null;
   npm_hosts: string | null;
+  apache_hosts?: string | null;
   last_updated: number;
 }
 
@@ -187,6 +188,7 @@ function rowToStats(row: StatsRow, now: number): ServerStats {
     containers,
     ips: parseJson<string[]>(row.ips, []),
     npmHosts: parseJson<DetectedNpmHost[] | null>(row.npm_hosts, null),
+    apacheHosts: parseJson<DetectedNpmHost[] | null>(row.apache_hosts ?? null, null),
     lastUpdated: row.last_updated,
     online: now - row.last_updated <= config.offlineAfterMs,
   };
@@ -214,8 +216,8 @@ export function createIngestHandler(db: DB, onTraffic?: (samples: TrafficSample[
 
   const upsert = db.prepare(`
     INSERT INTO server_stats (server_id, cpu_usage, ram_usage, disk_usage, uptime_seconds, hostname,
-                              apps_total, apps_running, container_list, containers, ips, npm_hosts, last_updated)
-    VALUES (@serverId, @cpu, @ram, @disk, @uptime, @hostname, @appsTotal, @appsRunning, @containerList, @containers, @ips, @npmHosts, @now)
+                              apps_total, apps_running, container_list, containers, ips, npm_hosts, apache_hosts, last_updated)
+    VALUES (@serverId, @cpu, @ram, @disk, @uptime, @hostname, @appsTotal, @appsRunning, @containerList, @containers, @ips, @npmHosts, @apacheHosts, @now)
     ON CONFLICT (server_id) DO UPDATE SET
       cpu_usage = excluded.cpu_usage,
       ram_usage = excluded.ram_usage,
@@ -228,6 +230,7 @@ export function createIngestHandler(db: DB, onTraffic?: (samples: TrafficSample[
       containers = excluded.containers,
       ips = excluded.ips,
       npm_hosts = excluded.npm_hosts,
+      apache_hosts = excluded.apache_hosts,
       last_updated = excluded.last_updated
   `);
   const insertMetric = db.prepare('INSERT INTO metrics (server_id, ts, cpu, ram, disk) VALUES (?, ?, ?, ?, ?)');
@@ -269,6 +272,7 @@ export function createIngestHandler(db: DB, onTraffic?: (samples: TrafficSample[
       containers: JSON.stringify(containers),
       ips: JSON.stringify(toIps(body.ips)),
       npmHosts: Array.isArray(body.npm) ? JSON.stringify(toNpmHosts(body.npm)) : null,
+      apacheHosts: Array.isArray(body.apache) ? JSON.stringify(toNpmHosts(body.apache)) : null,
       now,
     });
 

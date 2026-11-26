@@ -1,14 +1,13 @@
-import { ChevronDown, ChevronLeft, ExternalLink, Filter, MoonStar, Play, RefreshCw, Search, Trash2, Undo2, Waypoints, X } from 'lucide-react';
+import { ChevronLeft, ExternalLink, Filter, Play, RefreshCw, Trash2, Undo2, Waypoints, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HistoryRange, Monitor, MonitorHistoryPoint, WebIncident, WebTrafficPoint } from '../../../shared/types';
-import { api, type DiscoveryState, type DormantWeb } from '../../api';
+import { api } from '../../api';
 import { formatDateTime, formatMs, formatNumber, formatPercent, formatTime, timeAgo } from '../../lib/format';
 import { useMediaQuery, usePolling, useStoredState, useWidth } from '../../lib/hooks';
 import { MONITOR_META } from '../../lib/status';
 import { cn } from '../../lib/utils';
 import { NpmDialog } from '../NpmDialog';
 import { Button, StatusBadge, useConfirm, useToast } from '../ui';
-import { DiscoveryDialog } from './DiscoveryDialog';
 import { RouteAnimation, type NodeId } from './RouteAnimation';
 
 const RANGES: { value: HistoryRange; label: string }[] = [
@@ -65,14 +64,6 @@ export function WebsView({
 }) {
   const bars = usePolling(() => api.webBars(), 60_000);
   const [npmOpen, setNpmOpen] = useState(false);
-  const [findOpen, setFindOpen] = useState(false);
-  const discovery = usePolling(() => api.discovery(), 60_000);
-  // Mientras busca, se pregunta más a menudo.
-  useEffect(() => {
-    if (!discovery.data?.running) return;
-    const t = window.setInterval(() => void discovery.refresh(), 3000);
-    return () => window.clearInterval(t);
-  }, [discovery.data?.running, discovery]);
   const wide = useMediaQuery('(min-width: 1024px)');
   // En móvil, la lista y la ficha son dos pantallas: «showDetail» dice cuál se ve.
   const [showDetail, setShowDetail] = useState(false);
@@ -81,100 +72,15 @@ export function WebsView({
     setShowDetail(true);
     window.scrollTo?.({ top: 0 });
   };
-  const notWatched = (discovery.data?.candidates ?? []).filter((c) => c.responds).length;
-  // «Solo las webs de Nginx Proxy Manager»
+  // Qué webs se vigilan: solo las de los proxys (NPM, Apache) y solo las que funcionan; el panel lo
+  // decide solo y aquí únicamente se avisa de lo que ha quitado o de lo que vuelve.
   const scope = usePolling(() => api.webScope(), 60_000);
-  const confirm = useConfirm();
-  const toast = useToast();
   const [seenPruned, setSeenPruned] = useStoredState<number>('panel:webs-quitadas-vistas', 0);
   const [seenRestored, setSeenRestored] = useStoredState<number>('panel:webs-vuelven-vistas', 0);
-  const [asideOpen, setAsideOpen] = useState(false);
-  const [rechecking, setRechecking] = useState(false);
-  const npmOnly = scope.data?.npmOnly ?? true;
-  const onlyWorking = scope.data?.onlyWorking ?? true;
   const dormant = scope.data?.dormant ?? [];
-  const lastRestored =
-    scope.data?.lastRestored && scope.data.lastRestored.at > seenRestored && now - scope.data.lastRestored.at < 7 * 86_400_000 ? scope.data.lastRestored : null;
-  async function refreshAll() {
-    await onChange();
-    void bars.refresh();
-    void discovery.refresh();
-  }
-  async function setOnlyWorking(on: boolean) {
-    const st = await api.webScopeSet({ onlyWorking: on });
-    scope.setData(st);
-    await refreshAll();
-  }
-  async function keep(w: DormantWeb) {
-    scope.setData(await api.webScopeKeep(w.host));
-    toast(`${w.name} vuelve a vigilarse y no se apartará`);
-    await refreshAll();
-  }
-  async function forget(w: DormantWeb | null) {
-    const many = w === null;
-    const ok = await confirm({
-      title: many ? `Olvidar ${dormant.length === 1 ? 'la web apartada' : `las ${dormant.length} webs apartadas`}` : `Olvidar ${w.name}`,
-      message: (
-        <div>
-          <p>Deja{many && dormant.length > 1 ? 'n' : ''} de probarse y no vuelve{many && dormant.length > 1 ? 'n' : ''} a la lista aunque responda{many && dormant.length > 1 ? 'n' : ''}. Si la quieres más adelante, impórtala desde Nginx Proxy Manager.</p>
-          {many && listNames(dormant.map((d) => d.name))}
-        </div>
-      ),
-      confirmLabel: 'Olvidar',
-      danger: true,
-    });
-    if (!ok) return;
-    scope.setData(await api.webScopeForget(many ? { all: true } : { host: w.host }));
-  }
-  async function recheckAside() {
-    setRechecking(true);
-    try {
-      const st = await api.webScopeRecheck();
-      scope.setData(st);
-      toast(st.back.length ? `Vuelven ${st.back.length}: ${st.back.join(', ')}` : 'Siguen sin responder');
-      if (st.back.length) setSeenRestored(st.lastRestored?.at ?? Date.now());
-      await refreshAll();
-    } finally {
-      setRechecking(false);
-    }
-  }
-  const outside = scope.data?.ready ? scope.data.outside : [];
-  const lastPruned = scope.data?.lastPruned && scope.data.lastPruned.at > seenPruned && now - scope.data.lastPruned.at < 7 * 86_400_000 ? scope.data.lastPruned : null;
-  const listNames = (names: string[]) => (
-    <ul className="mt-2 max-h-48 space-y-0.5 overflow-y-auto font-mono text-[12px] text-ink-2">
-      {names.map((n) => (
-        <li key={n}>{n}</li>
-      ))}
-    </ul>
-  );
-  async function setNpmOnly(on: boolean) {
-    if (on && outside.length) {
-      const ok = await confirm({
-        title: 'Solo las webs de Nginx Proxy Manager',
-        message: (
-          <div>
-            <p>
-              Se dejan de vigilar {outside.length === 1 ? 'esta web, que no está' : `estas ${outside.length} webs, que no están`} en ningún NPM (se borra su
-              historial). A partir de ahora, las que borres de NPM también se quitarán solas.
-            </p>
-            {listNames(outside.map((m) => m.name))}
-          </div>
-        ),
-        confirmLabel: outside.length === 1 ? 'Quitar 1 web' : `Quitar ${outside.length} webs`,
-        danger: true,
-      });
-      if (!ok) return;
-    }
-    const st = await api.webScopeSet({ npmOnly: on });
-    scope.setData(st);
-    if (on && outside.length) {
-      setSeenPruned(st.lastPruned?.at ?? Date.now());
-      toast(outside.length === 1 ? 'Quitada 1 web que no está en NPM' : `Quitadas ${outside.length} webs que no están en NPM`);
-    }
-    await onChange();
-    void bars.refresh();
-    void discovery.refresh();
-  }
+  const recent = <T extends { at: number }>(x: T | null | undefined, seen: number) => (x && x.at > seen && now - x.at < 7 * 86_400_000 ? x : null);
+  const lastPruned = recent(scope.data?.lastPruned, seenPruned);
+  const lastRestored = recent(scope.data?.lastRestored, seenRestored);
   // Si el panel ha quitado, apartado o recuperado webs por su cuenta, la lista se actualiza.
   const changeKey = `${scope.data?.lastPruned?.at ?? 0}|${scope.data?.lastRestored?.at ?? 0}|${dormant.length}`;
   useEffect(() => {
@@ -217,7 +123,7 @@ export function WebsView({
               <Filter size={14} className="mt-0.5 shrink-0 text-ink-3" aria-hidden />
               <p className="min-w-0 flex-1 text-[12px] text-ink-2">
                 <span className="font-medium text-ink">
-                  {lastPruned.names.length === 1 ? 'Quitada 1 web que no está en NPM' : `Quitadas ${lastPruned.names.length} webs que no están en NPM`}
+                  {lastPruned.names.length === 1 ? 'Quitada 1 web que ya no está en tus proxys' : `Quitadas ${lastPruned.names.length} webs que ya no están en tus proxys`}
                 </span>{' '}
                 <span className="text-ink-3">· {timeAgo(lastPruned.at, now)}</span>
                 <span className="mt-0.5 block break-words text-ink-3">{lastPruned.names.join(', ')}</span>
@@ -232,7 +138,7 @@ export function WebsView({
               <Undo2 size={14} className="mt-0.5 shrink-0 text-ok" aria-hidden />
               <p className="min-w-0 flex-1 text-[12px] text-ink-2">
                 <span className="font-medium text-ink">
-                  {lastRestored.names.length === 1 ? 'Vuelve a responder 1 web apartada' : `Vuelven a responder ${lastRestored.names.length} webs apartadas`}
+                  {lastRestored.names.length === 1 ? 'Vuelve 1 web: responde otra vez' : `Vuelven ${lastRestored.names.length} webs: responden otra vez`}
                 </span>{' '}
                 <span className="text-ink-3">· {timeAgo(lastRestored.at, now)}</span>
                 <span className="mt-0.5 block break-words text-ink-3">{lastRestored.names.join(', ')}</span>
@@ -241,46 +147,6 @@ export function WebsView({
                 <X size={13} aria-hidden />
               </button>
             </div>
-          )}
-          {!npmOnly && outside.length > 0 && (
-            <button
-              type="button"
-              onClick={() => void setNpmOnly(true)}
-              className="flex w-full items-center gap-2.5 rounded-[12px] border border-warn/30 bg-warn/[0.06] px-3 py-2.5 text-left transition-colors hover:bg-warn/[0.1]"
-            >
-              <Filter size={15} className="shrink-0 text-warn" aria-hidden />
-              <span className="min-w-0 flex-1">
-                <span className="block text-[13px] font-medium text-ink">
-                  {outside.length === 1 ? '1 web no está en NPM' : `${outside.length} webs no están en NPM`}
-                </span>
-                <span className="block text-[11.5px] text-ink-3">Quitarlas y vigilar solo las de Nginx Proxy Manager</span>
-              </span>
-            </button>
-          )}
-          {npmOnly ? null : notWatched > 0 ? (
-            <button
-              type="button"
-              onClick={() => setFindOpen(true)}
-              className="flex w-full items-center gap-2.5 rounded-[12px] border border-accent/30 bg-accent/[0.07] px-3 py-2.5 text-left transition-colors hover:bg-accent/[0.11]"
-            >
-              <Search size={15} className="shrink-0 text-accent" aria-hidden />
-              <span className="min-w-0 flex-1">
-                <span className="block text-[13px] font-medium text-ink">
-                  {notWatched} {notWatched === 1 ? 'web tuya sin vigilar' : 'webs tuyas sin vigilar'}
-                </span>
-                <span className="block text-[11.5px] text-ink-3">Encontradas en tus certificados y en NPM · Revisar</span>
-              </span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setFindOpen(true)}
-              className="flex w-full items-center gap-2 rounded-[10px] border border-line px-3 py-2 text-left text-[12.5px] text-ink-2 transition-colors hover:border-line-strong hover:bg-white/[0.03] hover:text-ink"
-            >
-              <Search size={14} className={cn('shrink-0 text-ink-3', discovery.data?.running && 'animate-pulse')} aria-hidden />
-              <span className="flex-1">{discovery.data?.running ? 'Buscando tus webs…' : 'Buscar todas tus webs'}</span>
-              {discovery.data?.lastRun && <span className="text-[11px] text-ink-3">{timeAgo(discovery.data.lastRun, now)}</span>}
-            </button>
           )}
           <ul className="overflow-hidden rounded-[12px] border border-line bg-surface">
             {monitors === null && <li className="px-3 py-3 text-sm text-ink-3">Cargando…</li>}
@@ -317,69 +183,6 @@ export function WebsView({
               );
             })}
           </ul>
-          {dormant.length > 0 && (
-            <div className="overflow-hidden rounded-[12px] border border-line">
-              <button
-                type="button"
-                onClick={() => setAsideOpen((v) => !v)}
-                aria-expanded={asideOpen}
-                className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-[12.5px] text-ink-2 transition-colors hover:bg-white/[0.03] hover:text-ink"
-              >
-                <MoonStar size={14} className="shrink-0 text-ink-3" aria-hidden />
-                <span className="flex-1">
-                  {dormant.length === 1 ? '1 web apartada' : `${dormant.length} webs apartadas`}{' '}
-                  <span className="text-ink-3">· no {dormant.length === 1 ? 'funciona' : 'funcionan'}</span>
-                </span>
-                <ChevronDown size={14} className={cn('shrink-0 text-ink-3 transition-transform', asideOpen && 'rotate-180')} aria-hidden />
-              </button>
-              {asideOpen && (
-                <div className="border-t border-line">
-                  <p className="px-3 pt-2.5 text-[11.5px] text-ink-3">Se vuelven a probar cada 10 minutos y vuelven solas a la lista en cuanto responden.</p>
-                  <ul className="divide-y divide-line">
-                    {dormant.map((w) => (
-                      <li key={w.host} className="flex items-start gap-2 px-3 py-2.5">
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[13px] text-ink-2">{w.name}</span>
-                          <span className="block text-[11.5px] text-ink-3">
-                            {w.reason === 'npm'
-                              ? 'Desactivada o con error en NPM'
-                              : w.reason === 'never'
-                                ? 'No ha respondido nunca'
-                                : `Sin responder desde ${w.lastOk ? timeAgo(w.lastOk, now) : 'hace más de un día'}`}
-                            {w.lastProbe ? ` · probada ${timeAgo(w.lastProbe, now)}` : ''}
-                          </span>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => void keep(w)}
-                          className="shrink-0 rounded-md px-2 py-1 text-[11.5px] text-ink-3 transition-colors hover:bg-white/5 hover:text-ink"
-                        >
-                          Vigilar igualmente
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void forget(w)}
-                          aria-label={`Olvidar ${w.name}`}
-                          title="Olvidar: no vuelve a probarse"
-                          className="-mr-1 shrink-0 rounded-md p-1.5 text-ink-3 transition-colors hover:bg-bad/10 hover:text-bad"
-                        >
-                          <X size={13} aria-hidden />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-3 py-2">
-                    <Button size="sm" variant="ghost" loading={rechecking} onClick={() => void recheckAside()}>
-                      <RefreshCw size={13} aria-hidden /> Probarlas ahora
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => void forget(null)} className="text-ink-3 hover:text-bad">
-                      <Trash2 size={13} aria-hidden /> Olvidar {dormant.length === 1 ? 'la' : 'todas'}
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
           <button
             type="button"
             onClick={() => setNpmOpen(true)}
@@ -388,44 +191,6 @@ export function WebsView({
             <Waypoints size={14} className="shrink-0 text-ink-3" aria-hidden />
             Nginx Proxy Manager
           </button>
-          {scope.data && (
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-[10px] px-1 py-1 text-[12.5px]">
-              <input
-                type="checkbox"
-                checked={npmOnly}
-                onChange={(e) => void setNpmOnly(e.target.checked)}
-                className="mt-0.5 size-4 shrink-0 accent-[var(--color-accent)]"
-              />
-              <span>
-                <span className="block text-ink-2">Solo las webs de Nginx Proxy Manager</span>
-                <span className="block text-[11.5px] text-ink-3">
-                  {npmOnly
-                    ? scope.data.ready
-                      ? 'Las que borres de NPM dejan de vigilarse solas.'
-                      : 'Aún no llegan los datos de NPM: no se quita nada hasta entonces.'
-                    : 'Desactivado: puedes vigilar webs que no estén en NPM y buscarlas en tus certificados.'}
-                </span>
-              </span>
-            </label>
-          )}
-          {scope.data && (
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-[10px] px-1 py-1 text-[12.5px]">
-              <input
-                type="checkbox"
-                checked={onlyWorking}
-                onChange={(e) => void setOnlyWorking(e.target.checked)}
-                className="mt-0.5 size-4 shrink-0 accent-[var(--color-accent)]"
-              />
-              <span>
-                <span className="block text-ink-2">Solo las webs que funcionan</span>
-                <span className="block text-[11.5px] text-ink-3">
-                  {onlyWorking
-                    ? 'Se apartan a los pocos minutos las que no han respondido nunca, y las que llevan un día caídas. Si una que funciona se cae, se queda y te avisa.'
-                    : 'Desactivado: se vigilan todas, respondan o no.'}
-                </span>
-              </span>
-            </label>
-          )}
           <p className="text-[11.5px] text-ink-3">Barras: últimas 24 horas, una por hora.</p>
         </aside>
 
@@ -452,16 +217,6 @@ export function WebsView({
         </div>
       </div>
       <NpmDialog open={npmOpen} onClose={() => setNpmOpen(false)} servers={servers} onImported={() => void onChange()} />
-      <DiscoveryDialog
-        open={findOpen}
-        onClose={() => setFindOpen(false)}
-        state={discovery.data}
-        onState={(st: DiscoveryState) => discovery.setData(st)}
-        onWatched={() => {
-          void onChange();
-          void bars.refresh();
-        }}
-      />
     </div>
   );
 }
